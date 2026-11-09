@@ -1,0 +1,68 @@
+do $$
+declare
+  a uuid := '11111111-1111-4111-8111-111111111111';
+  b uuid := '22222222-2222-4222-8222-222222222222';
+  la uuid; lb uuid; n int; tok text; r text := '';
+begin
+  insert into auth.users (id, aud, role, email, email_confirmed_at, raw_user_meta_data) values
+    (a, 'authenticated', 'authenticated', 'a@isolamento.test', now(), '{"full_name":"Teste A"}'),
+    (b, 'authenticated', 'authenticated', 'b@isolamento.test', now(), '{"full_name":"Teste B"}');
+  select count(*) into n from public.profiles where id in (a, b);
+  r := r || case when n = 2 then 'PASS' else 'FAIL' end || ' gatilho criou os 2 perfis' || E'\n';
+
+  perform set_config('request.jwt.claim.sub', a::text, true);
+  set local role authenticated;
+  la := public.create_barbershop('Teste A', 'teste-a-isolamento');
+  reset role;
+  perform set_config('request.jwt.claim.sub', b::text, true);
+  set local role authenticated;
+  lb := public.create_barbershop('Teste B', 'teste-b-isolamento');
+  r := r || 'PASS create_barbershop funciona sob RLS (sem a recursao da versao antiga)' || E'\n';
+
+  select count(*) into n from public.barbershops;
+  r := r || case when n = 1 then 'PASS' else 'FAIL' end || ' B enxerga so a propria barbearia (' || n || E')\n';
+  select count(*) into n from public.memberships where barbershop_id = la;
+  r := r || case when n = 0 then 'PASS' else 'FAIL' end || ' B nao le vinculos de A' || E'\n';
+  select count(*) into n from public.audit_logs where barbershop_id = la;
+  r := r || case when n = 0 then 'PASS' else 'FAIL' end || ' B nao le auditoria de A' || E'\n';
+  select count(*) into n from public.profiles where id = a;
+  r := r || case when n = 0 then 'PASS' else 'FAIL' end || ' B nao le o perfil de A' || E'\n';
+  update public.barbershops set nome = 'Invadida' where id = la;
+  get diagnostics n = row_count;
+  r := r || case when n = 0 then 'PASS' else 'FAIL' end || ' B nao altera a barbearia de A' || E'\n';
+  begin perform public.create_invite(la, 'x@isolamento.test', 'barbeiro'); r := r || 'FAIL B convidou para A' || E'\n';
+  exception when others then r := r || 'PASS B nao convida para A (' || sqlerrm || E')\n'; end;
+  begin insert into public.memberships (barbershop_id, profile_id, papel) values (lb, b, 'gerente'); r := r || 'FAIL insert direto em vinculos' || E'\n';
+  exception when others then r := r || 'PASS insert direto em vinculos negado' || E'\n'; end;
+  begin update public.memberships set papel = 'proprietario' where profile_id = b; r := r || 'FAIL update de papel' || E'\n';
+  exception when others then r := r || 'PASS auto-promocao de papel negada' || E'\n'; end;
+  begin perform token_hash from public.invites; r := r || 'FAIL token_hash legivel' || E'\n';
+  exception when others then r := r || 'PASS token_hash ilegivel' || E'\n'; end;
+  begin insert into public.barbershops (owner_id, nome, slug) values (b, 'X', 'insert-direto'); r := r || 'FAIL insert direto em barbearias' || E'\n';
+  exception when others then r := r || 'PASS insert direto em barbearias negado' || E'\n'; end;
+
+  reset role;
+  perform set_config('request.jwt.claim.sub', a::text, true);
+  set local role authenticated;
+  select count(*) into n from public.barbershops;
+  r := r || case when n = 1 then 'PASS' else 'FAIL' end || ' A enxerga so a propria barbearia (' || n || E')\n';
+  tok := public.create_invite(la, 'b@isolamento.test', 'barbeiro');
+  reset role;
+  perform set_config('request.jwt.claim.sub', b::text, true);
+  set local role authenticated;
+  perform public.accept_invite(tok);
+  select count(*) into n from public.barbershops;
+  r := r || case when n = 2 then 'PASS' else 'FAIL' end || ' convite aceito: B passa a ver as 2 barbearias' || E'\n';
+  select count(*) into n from public.audit_logs where barbershop_id = la;
+  r := r || case when n = 0 then 'PASS' else 'FAIL' end || ' barbeiro nao le a auditoria' || E'\n';
+
+  reset role;
+  set local role anon;
+  begin perform 1 from public.barbershops; r := r || 'FAIL anon leu barbearias' || E'\n';
+  exception when others then r := r || 'PASS anon sem acesso as tabelas' || E'\n'; end;
+  begin perform public.create_barbershop('X', 'anon-cria'); r := r || 'FAIL anon criou barbearia' || E'\n';
+  exception when others then r := r || 'PASS anon nao executa create_barbershop' || E'\n'; end;
+  reset role;
+
+  raise exception E'RESULTADO (tudo desfeito)\n%', r;
+end $$;

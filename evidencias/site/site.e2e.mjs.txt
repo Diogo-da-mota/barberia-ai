@@ -1,0 +1,485 @@
+import { chromium } from "playwright-core"
+import { mkdirSync } from "node:fs"
+
+const BASE = process.env.BASE ?? "http://localhost:5173"
+const OUT = process.argv[2]
+mkdirSync(OUT, { recursive: true })
+
+const results = []
+let group = ""
+const check = (name, ok, detail = "") => {
+  results.push({ group, ok })
+  console.log(`${ok ? "PASS" : "FAIL"}  [${group}] ${name}${detail ? `  (${detail})` : ""}`)
+}
+const path = (page) => new URL(page.url()).pathname
+const TOKEN_KEY = "sb-hbkbdqctelembzqiptpi-auth-token"
+
+const b64 = (o) => Buffer.from(JSON.stringify(o)).toString("base64url")
+const exp = () => Math.floor(Date.now() / 1000) + 3600
+const USER = {
+  id: "00000000-0000-4000-8000-000000000001", aud: "authenticated", role: "authenticated",
+  email: "teste@example.test", app_metadata: {}, user_metadata: { full_name: "Usuária Teste" },
+  identities: [{ id: "x" }], created_at: "2026-01-01T00:00:00Z",
+}
+const JWT = `${b64({ alg: "none" })}.${b64({ sub: USER.id, exp: exp(), role: "authenticated" })}.teste`
+const SESSION = { access_token: JWT, refresh_token: "teste", token_type: "bearer", expires_in: 3600, expires_at: exp(), user: USER }
+
+const browser = await chromium.launch({ channel: "chrome", headless: true })
+
+/** real=true: fala com o Supabase real. real=false: toda chamada ao Supabase é interceptada. */
+async function open({ width = 1440, height = 900, real = false, session = false, theme = "dark", fakeSession = null, mocks = {}, rest = "unavailable" }) {
+  const context = await browser.newContext({ viewport: { width, height }, hasTouch: width < 768 })
+  const page = await context.newPage()
+  const log = { pageErrors: [], consoleErrors: [], requests: [] }
+  page.on("pageerror", (e) => log.pageErrors.push(e.message))
+  page.on("console", (m) => { if (m.type() === "error") log.consoleErrors.push(m.text()) })
+  page.on("request", (r) => { if (r.url().includes("supabase.co")) log.requests.push({ url: r.url(), method: r.method(), body: r.postData() }) })
+
+  const stored = fakeSession ?? (session ? SESSION : null)
+  await context.addInitScript(({ theme, stored, key }) => {
+    localStorage.setItem("barberia:theme", theme)
+    if (stored && !sessionStorage.getItem("__seeded")) {
+      sessionStorage.setItem("__seeded", "1")
+      localStorage.setItem(key, JSON.stringify(stored))
+    }
+  }, { theme, stored, key: TOKEN_KEY })
+
+  if (!real) {
+    await context.route(/supabase\.co/, async (route) => {
+      const url = route.request().url()
+      const method = route.request().method()
+      if (url.includes("/rest/v1/")) {
+        return rest === "unavailable"
+          ? route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ code: "PGRST205", message: "tabela ausente" }) })
+          : route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(rest) })
+      }
+      for (const [pattern, reply] of Object.entries(mocks)) {
+        if (url.includes(pattern)) {
+          const r = typeof reply === "function" ? reply(route.request()) : reply
+          return route.fulfill({ status: r.status ?? 200, contentType: "application/json", body: JSON.stringify(r.body ?? {}) })
+        }
+      }
+      if (url.includes("/auth/v1/logout")) return route.fulfill({ status: 204, body: "" })
+      if (url.includes("/auth/v1/user")) {
+        return method === "GET" || method === "PUT"
+          ? route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(USER) })
+          : route.abort()
+      }
+      return route.abort()
+    })
+  }
+  return { page, context, log }
+}
+
+const appErrors = (log) => log.consoleErrors.filter((e) => !/Failed to load resource/.test(e))
+const noOverflow = (page) => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)
+const dialog = (page) => page.getByRole("dialog")
+const shot = (page, name, fullPage = false) => page.screenshot({ path: `${OUT}/${name}.png`, fullPage })
+
+// ======================================================================
+group = "REAL"
+// ======================================================================
+{
+  const { page, context, log } = await open({ real: true })
+  await page.goto(BASE + "/", { waitUntil: "networkidle" })
+  check("/ abre a Landing sem login", path(page) === "/" && (await page.getByRole("heading", { level: 1 }).innerText()) === "Agendamento online para barbearias")
+  const text = await page.locator("body").innerText()
+  check("/ não mostra conteúdo privado", !/Próximos atendimentos|Suas barbearias|Sair\b|R\$/.test(text))
+  check("/ sem chamada a dados privados", !log.requests.some((r) => r.url.includes("/rest/v1/")))
+  check("/ sem erro de aplicação", log.pageErrors.length === 0 && log.consoleErrors.length === 0, [...log.pageErrors, ...log.consoleErrors].join(" | ").slice(0, 180))
+
+  await page.getByRole("banner").getByRole("button", { name: "Entrar" }).click()
+  await dialog(page).waitFor()
+  check("Entrar abre o popup sem trocar de página", path(page) === "/")
+  const box = await dialog(page).boundingBox()
+  check("popup centralizado e com até 480px", Math.abs(box.x + box.width / 2 - 720) <= 1 && Math.abs(box.y + box.height / 2 - 450) <= 1 && box.width <= 480, `${box.width}x${Math.round(box.height)}`)
+  await shot(page, "popup-entrar-1440")
+
+  await dialog(page).getByRole("button", { name: "Fechar" }).click()
+  await dialog(page).waitFor({ state: "detached" })
+  check("X fecha e limpa o endereço", new URL(page.url()).search === "")
+
+  await page.getByRole("banner").getByRole("button", { name: "Entrar" }).click()
+  await dialog(page).waitFor()
+  await page.keyboard.press("Escape")
+  await dialog(page).waitFor({ state: "detached" })
+  check("Esc fecha", true)
+
+  await page.getByRole("banner").getByRole("button", { name: "Entrar" }).click()
+  await dialog(page).waitFor()
+  await page.mouse.click(40, 450)
+  await dialog(page).waitFor({ state: "detached" })
+  check("clique fora fecha", true)
+
+  await page.getByRole("banner").getByRole("button", { name: "Entrar" }).click()
+  await dialog(page).waitFor()
+  await page.goBack()
+  await dialog(page).waitFor({ state: "detached" })
+  check("voltar do navegador fecha", true)
+
+  // Validação no navegador real: nenhuma credencial deve sair da máquina.
+  await page.goto(BASE + "/?auth=entrar", { waitUntil: "networkidle" })
+  const before = log.requests.length
+  await dialog(page).getByRole("button", { name: "Entrar", exact: true }).click()
+  await dialog(page).getByText("Informe seu email.").waitFor()
+  check("login vazio é barrado sem chamar o servidor", log.requests.length === before)
+  check("foco vai ao primeiro campo inválido", await page.evaluate(() => document.activeElement?.getAttribute("name") === "email"))
+  await shot(page, "popup-validacao-1440")
+  await context.close()
+}
+for (const route of ["/dashboard", "/dashboard/agendamentos", "/login"]) {
+  const { page, context } = await open({ real: true })
+  await page.goto(BASE + route, { waitUntil: "load" })
+  await dialog(page).waitFor()
+  check(`${route} sem sessão vai para / com popup`, path(page) === "/" && new URL(page.url()).search === "?auth=entrar")
+  check(`${route} não mostra o painel`, (await page.getByText("Próximos atendimentos").count()) === 0)
+  await context.close()
+}
+{
+  const { page, context, log } = await open({ real: true })
+  await page.goto(BASE + "/rota-que-nao-existe", { waitUntil: "load" })
+  await page.getByRole("heading", { level: 1 }).waitFor()
+  check("rota desconhecida volta para /", path(page) === "/")
+  check("rota desconhecida sem erro", log.pageErrors.length === 0)
+  await context.close()
+}
+{
+  // Token forjado: é o servidor REAL do Supabase que recusa.
+  const { page, context, log } = await open({ real: true, fakeSession: SESSION })
+  const responses = []
+  page.on("response", (r) => { if (r.url().includes("/auth/v1/user")) responses.push(r.status()) })
+  await page.goto(BASE + "/dashboard", { waitUntil: "load" })
+  await dialog(page).waitFor({ timeout: 20000 })
+  const body = await dialog(page).innerText()
+  check("token forjado é recusado pelo servidor real", responses.some((s) => s === 401 || s === 403), responses.join(","))
+  check("token forjado não abre o painel", path(page) === "/" && (await page.getByText("Próximos atendimentos").count()) === 0)
+  check("avisa que a sessão expirou", body.includes("Sua sessão expirou"))
+  check("token removido do navegador", (await page.evaluate((k) => localStorage.getItem(k), TOKEN_KEY)) === null)
+  const calls = log.requests.filter((r) => r.url.includes("/auth/v1/user")).length
+  const dataCalls = log.requests.filter((r) => r.url.includes("/rest/v1/")).length
+  await page.waitForTimeout(1500)
+  check("sem ciclo de redirecionamento", log.requests.filter((r) => r.url.includes("/auth/v1/user")).length === calls && path(page) === "/", `${calls} chamadas`)
+  check("nenhuma consulta de dados com token forjado", dataCalls === 0)
+  await context.close()
+}
+{
+  // Google: segue até a tela real do Google e para. Nenhum login é feito.
+  const { page, context, log } = await open({ real: true })
+  await page.goto(BASE + "/dashboard/agendamentos", { waitUntil: "load" })
+  await dialog(page).waitFor()
+  await dialog(page).getByRole("button", { name: "Continuar com Google" }).click()
+  await page.waitForURL(/accounts\.google\.com/, { timeout: 20000, waitUntil: "commit" })
+  const google = new URL(page.url())
+  const authorize = log.requests.find((r) => r.url.includes("/auth/v1/authorize"))
+  const redirectTo = authorize && new URL(authorize.url).searchParams.get("redirect_to")
+  check("Google chega à tela real do Google", google.hostname === "accounts.google.com", google.hostname)
+  check("redirect_to usa a origem atual", redirectTo === `${BASE}/auth/callback`, redirectTo ?? "")
+  const inner = new URLSearchParams(google.search)
+  const cont = inner.get("redirect_uri") ?? new URL(inner.get("continue") ?? "https://x").searchParams.get("redirect_uri")
+  check("Google devolve ao callback do projeto autorizado", (cont ?? page.url()).includes("hbkbdqctelembzqiptpi"), (cont ?? "").slice(0, 70))
+  await context.close()
+}
+
+// ======================================================================
+group = "SIMULADO"
+// ======================================================================
+const OK_LOGIN = { "/auth/v1/token": { body: SESSION } }
+
+{
+  const { page, context, log } = await open({ mocks: OK_LOGIN })
+  await page.goto(BASE + "/?auth=entrar", { waitUntil: "load" })
+  await dialog(page).waitFor()
+  await dialog(page).getByLabel("Email").fill("teste@example.test")
+  await dialog(page).getByLabel("Senha", { exact: true }).fill("senha-de-teste")
+  check("senha inicia oculta", (await dialog(page).getByLabel("Senha", { exact: true }).getAttribute("type")) === "password")
+  await dialog(page).getByRole("button", { name: "Mostrar senha" }).click()
+  check("mostrar senha", (await dialog(page).getByLabel("Senha", { exact: true }).getAttribute("type")) === "text")
+  await dialog(page).getByRole("button", { name: "Ocultar senha" }).click()
+  await dialog(page).getByRole("button", { name: "Entrar", exact: true }).click()
+  await page.waitForURL(BASE + "/dashboard")
+  await page.getByRole("heading", { name: "Próximos atendimentos" }).waitFor()
+  check("login aceito abre /dashboard", true)
+  check("sessão salva", (await page.evaluate((k) => Boolean(localStorage.getItem(k)), TOKEN_KEY)))
+  await page.reload({ waitUntil: "load" })
+  await page.getByRole("heading", { name: "Próximos atendimentos" }).waitFor()
+  check("sessão persiste ao recarregar", path(page) === "/dashboard")
+  await page.locator("aside").getByRole("button", { name: "Sair" }).click()
+  await page.waitForURL(BASE + "/")
+  await page.getByRole("heading", { level: 1 }).waitFor()
+  await page.waitForTimeout(400)
+  check("logout volta para /", path(page) === "/")
+  check("logout não abre o popup", (await dialog(page).count()) === 0)
+  check("logout remove a sessão", (await page.evaluate((k) => localStorage.getItem(k), TOKEN_KEY)) === null)
+  check("header volta a oferecer Entrar", await page.getByRole("banner").getByRole("button", { name: "Entrar" }).isVisible())
+  await page.goto(BASE + "/dashboard", { waitUntil: "load" })
+  await dialog(page).waitFor()
+  check("após logout, /dashboard volta a exigir login", path(page) === "/")
+  check("fluxo sem erro de aplicação", log.pageErrors.length === 0 && appErrors(log).length === 0, [...log.pageErrors, ...appErrors(log)].join(" | ").slice(0, 200))
+  await context.close()
+}
+{
+  const { page, context } = await open({ mocks: OK_LOGIN })
+  await page.goto(BASE + "/dashboard/agendamentos", { waitUntil: "load" })
+  await dialog(page).waitFor()
+  await dialog(page).getByLabel("Email").fill("teste@example.test")
+  await dialog(page).getByLabel("Senha", { exact: true }).fill("senha-de-teste")
+  await dialog(page).getByRole("button", { name: "Entrar", exact: true }).click()
+  await page.waitForURL(BASE + "/dashboard/agendamentos")
+  check("login volta ao destino protegido pedido", true)
+  await context.close()
+}
+{
+  const { page, context } = await open({ mocks: { "/auth/v1/token": { status: 400, body: { code: 400, error_code: "invalid_credentials", msg: "Invalid login credentials" } } } })
+  await page.goto(BASE + "/?auth=entrar", { waitUntil: "load" })
+  await dialog(page).waitFor()
+  await dialog(page).getByLabel("Email").fill("teste@example.test")
+  await dialog(page).getByLabel("Senha", { exact: true }).fill("errada")
+  await dialog(page).getByRole("button", { name: "Entrar", exact: true }).click()
+  await dialog(page).getByRole("alert").waitFor()
+  check("senha errada mostra a mensagem certa", (await dialog(page).getByRole("alert").innerText()) === "Email ou senha incorretos.")
+  check("senha errada não sai da Landing", path(page) === "/")
+  await context.close()
+}
+{
+  let body = null
+  const signup = (req) => { body = JSON.parse(req.postData()); return { body: { ...USER, id: "x", confirmed_at: null } } }
+  const { page, context, log } = await open({ mocks: { "/auth/v1/signup": signup } })
+  await page.goto(BASE + "/", { waitUntil: "load" })
+  await page.getByRole("banner").getByRole("button", { name: "Criar conta" }).click()
+  await dialog(page).getByRole("heading", { name: "Criar conta" }).waitFor()
+  await dialog(page).getByRole("button", { name: "Criar conta" }).click()
+  await dialog(page).getByText("Informe seu nome.").waitFor()
+  check("cadastro vazio é barrado", !log.requests.some((r) => r.url.includes("/signup")))
+  await dialog(page).getByLabel("Nome").fill("Usuária Teste")
+  await dialog(page).getByLabel("Email").fill("teste@example.test")
+  await dialog(page).getByLabel("Senha", { exact: true }).fill("12345678")
+  await dialog(page).getByLabel("Confirmar senha").fill("diferente")
+  await dialog(page).getByRole("button", { name: "Criar conta" }).click()
+  await dialog(page).getByText("As senhas não são iguais.").waitFor()
+  check("senhas diferentes são barradas", !log.requests.some((r) => r.url.includes("/signup")))
+  await shot(page, "popup-criar-conta-1440")
+  await dialog(page).getByLabel("Confirmar senha").fill("12345678")
+  await dialog(page).getByRole("button", { name: "Criar conta" }).click()
+  await dialog(page).getByRole("heading", { name: "Confirme seu email" }).waitFor()
+  check("cadastro pede confirmação de email e não entra", path(page) === "/" && (await page.evaluate((k) => localStorage.getItem(k), TOKEN_KEY)) === null)
+  check("cadastro não envia papel nem permissão", body && !/role|papel|admin|barbershop/i.test(JSON.stringify(body)) && body.data.full_name === "Usuária Teste", JSON.stringify(body?.data))
+  const signupUrl = new URL(log.requests.find((r) => r.url.includes("/signup")).url)
+  check("cadastro volta para a origem atual", signupUrl.searchParams.get("redirect_to") === `${BASE}/auth/callback`)
+  await shot(page, "popup-confirme-email-1440")
+  await context.close()
+}
+{
+  const { page, context, log } = await open({ mocks: { "/auth/v1/recover": { body: {} } } })
+  await page.goto(BASE + "/?auth=entrar", { waitUntil: "load" })
+  await dialog(page).getByRole("button", { name: "Esqueci minha senha" }).click()
+  await dialog(page).getByRole("heading", { name: "Recuperar senha" }).waitFor()
+  await dialog(page).getByLabel("Email").fill("teste@example.test")
+  await dialog(page).getByRole("button", { name: "Enviar instruções" }).click()
+  await dialog(page).getByRole("heading", { name: "Verifique seu email" }).waitFor()
+  check("recuperação exibe confirmação e instruções", (await dialog(page).innerText()).includes("spam"))
+  const req = log.requests.find((r) => r.url.includes("/recover"))
+  check("recuperação volta para a origem atual", new URL(req.url).searchParams.get("redirect_to") === `${BASE}/auth/callback`)
+  await shot(page, "popup-recuperar-enviado-1440")
+  await context.close()
+}
+{
+  const { page, context, log } = await open({})
+  await page.goto(`${BASE}/auth/callback#access_token=${JWT}&refresh_token=teste&expires_in=3600&expires_at=${exp()}&token_type=bearer&type=recovery`, { waitUntil: "load" })
+  await page.getByRole("heading", { name: "Definir nova senha" }).waitFor()
+  check("link de recuperação abre a tela de nova senha", path(page) === "/auth/callback")
+  await page.getByLabel("Nova senha").fill("12345678")
+  await page.getByLabel("Confirmar senha").fill("12345678")
+  await shot(page, "nova-senha-1440")
+  await page.getByRole("button", { name: "Salvar nova senha" }).click()
+  await page.waitForURL(BASE + "/dashboard")
+  check("nova senha salva abre o painel", log.requests.some((r) => r.method === "PUT" && r.url.includes("/auth/v1/user")))
+  await context.close()
+}
+{
+  const { page, context } = await open({})
+  await page.goto(BASE + "/", { waitUntil: "load" })
+  await page.evaluate(() => sessionStorage.setItem("barberia:auth-next", "/dashboard/contas"))
+  await page.goto(`${BASE}/auth/callback#access_token=${JWT}&refresh_token=teste&expires_in=3600&expires_at=${exp()}&token_type=bearer`, { waitUntil: "load" })
+  await page.waitForURL(BASE + "/dashboard/contas", { timeout: 15000 })
+  check("retorno OAuth vai ao destino guardado", true)
+  await context.close()
+}
+{
+  const { page, context } = await open({})
+  await page.goto(`${BASE}/auth/callback#error=access_denied&error_code=otp_expired&error_description=x`, { waitUntil: "load" })
+  await dialog(page).waitFor()
+  check("link expirado explica o problema no popup", (await dialog(page).innerText()).includes("expirou ou já foi usado"))
+  await context.close()
+}
+{
+  const { page, context } = await open({ session: true })
+  await page.goto(BASE + "/", { waitUntil: "load" })
+  await page.getByRole("banner").getByRole("link", { name: "Abrir painel" }).waitFor()
+  check("com sessão, / continua na Landing", path(page) === "/" && (await dialog(page).count()) === 0)
+  await page.goto(BASE + "/login", { waitUntil: "load" })
+  await page.waitForURL(BASE + "/dashboard")
+  check("com sessão, /login vai ao painel", true)
+  await context.close()
+}
+
+// Painel preservado
+{
+  const { page, context, log } = await open({ session: true })
+  await page.goto(BASE + "/dashboard", { waitUntil: "load" })
+  await page.getByText("Cadastro de barbearias indisponível").waitFor()
+  const css = await page.evaluate(() => {
+    const cs = (e) => getComputedStyle(e)
+    const board = document.querySelector("section.bg-board")
+    return {
+      aside: document.querySelector("aside").offsetWidth,
+      content: document.querySelector("main > div").offsetWidth,
+      rootH: document.querySelector("#root > div").offsetHeight,
+      vh: innerHeight,
+      boardRadius: cs(board).borderRadius,
+      boardBg: cs(board).backgroundColor,
+      h1: cs(document.querySelector("h1")).fontFamily,
+    }
+  })
+  check("painel: sidebar 240px e conteúdo 1120px", css.aside === 240 && css.content === 1120, `${css.aside}/${css.content}`)
+  check("painel: altura e tokens preservados", css.rootH === css.vh && css.boardRadius === "6px 20px" && css.boardBg === "rgb(7, 8, 10)" && css.h1.includes("Barlow Condensed"))
+  for (const name of ["Próximos atendimentos", "Suas barbearias", "Indicadores"]) {
+    check(`painel: ${name}`, await page.getByRole("heading", { name }).isVisible())
+  }
+  check("painel: saudação", await page.getByRole("heading", { level: 1, name: "Olá, Usuária" }).isVisible())
+  check("painel: indisponível sem número inventado", !/\d/.test(await page.getByRole("region", { name: "Indicadores" }).innerText()))
+  await shot(page, "dashboard-1440")
+
+  const beforeTheme = await page.evaluate(() => document.documentElement.className)
+  await page.locator("aside").getByRole("button", { name: "Alternar tema" }).click()
+  check("painel: tema alterna", beforeTheme !== (await page.evaluate(() => document.documentElement.className)))
+  await page.locator("aside").getByRole("button", { name: "Alternar tema" }).click()
+
+  for (const [name, p] of [["Agendamentos", "/dashboard/agendamentos"], ["Cartões", "/dashboard/cartoes"], ["Contas", "/dashboard/contas"], ["Mais", "/dashboard/mais"], ["Início", "/dashboard"]]) {
+    await page.locator("aside nav").getByRole("link", { name }).click()
+    await page.waitForURL(BASE + p)
+    await page.locator(`aside a[aria-current="page"][href="${p}"]`).waitFor({ timeout: 5000 })
+    check(`painel: navega para ${p}`, (await page.locator('aside a[aria-current="page"]').count()) === 1)
+  }
+  await page.getByRole("link", { name: /Ver agenda/ }).click()
+  await page.waitForURL(BASE + "/dashboard/agendamentos")
+  check("painel: Ver agenda", true)
+  check("painel: sem exceção", log.pageErrors.length === 0)
+  await context.close()
+}
+{
+  const { page, context } = await open({ session: true, rest: [] })
+  await page.goto(BASE + "/dashboard", { waitUntil: "load" })
+  await page.getByText("Nenhuma barbearia vinculada").waitFor()
+  check("painel: lista vazia é diferente de banco indisponível", (await page.getByText("Cadastro de barbearias indisponível").count()) === 0)
+  await context.close()
+}
+for (const [width, height] of [[320, 568], [390, 844], [768, 1024], [1024, 768], [1440, 900]]) {
+  const { page, context } = await open({ width, height, session: true })
+  await page.goto(BASE + "/dashboard", { waitUntil: "load" })
+  await page.getByRole("heading", { name: "Suas barbearias" }).waitFor()
+  check(`painel ${width}px: sem scroll horizontal`, (await noOverflow(page)) <= 0)
+  const mobile = await page.locator("nav.fixed").isVisible()
+  check(`painel ${width}px: navegação certa`, width < 768 ? mobile : !mobile && (await page.locator("aside").isVisible()))
+  if (width === 390) await shot(page, "dashboard-390")
+  await context.close()
+}
+
+// ======================================================================
+group = "LAYOUT"
+// ======================================================================
+for (const [width, height] of [[320, 568], [360, 740], [390, 844], [768, 1024], [820, 1180], [1024, 768], [1440, 900]]) {
+  const { page, context, log } = await open({ width, height })
+  await page.goto(BASE + "/", { waitUntil: "networkidle" })
+  check(`${width}px: sem scroll horizontal`, (await noOverflow(page)) <= 0)
+  const m = await page.evaluate(() => {
+    const hero = document.querySelector("main > section").getBoundingClientRect()
+    const main = document.querySelector("main > section h1 ~ div button")?.getBoundingClientRect()
+    const small = [...document.querySelectorAll("header a, header button, main a, main button")]
+      .filter((e) => e.offsetParent && e.offsetHeight > 0 && e.offsetHeight < 44).map((e) => (e.textContent || e.getAttribute("aria-label")) + ":" + e.offsetHeight)
+    return { heroH: Math.round(hero.height), heroBottom: Math.round(hero.bottom), ctaBottom: main ? Math.round(main.bottom) : null, small }
+  })
+  check(`${width}px: botão principal na primeira tela`, m.ctaBottom !== null && m.ctaBottom <= height, `${m.ctaBottom}/${height}`)
+  if (width >= 360) check(`${width}px: hero sozinho na primeira tela`, m.heroBottom >= height, `${m.heroBottom}/${height}`)
+  if (width < 768) check(`${width}px: alvos de toque >= 44px`, m.small.length === 0, m.small.join(", "))
+  check(`${width}px: sem erro`, log.pageErrors.length === 0 && log.consoleErrors.length === 0)
+  if ([390, 768, 1024, 1440].includes(width)) {
+    await shot(page, `landing-${width}-primeira-tela`)
+    await shot(page, `landing-${width}-completa`, true)
+  }
+  await context.close()
+}
+{
+  const { page, context } = await open({ width: 390, height: 844 })
+  await page.goto(BASE + "/", { waitUntil: "networkidle" })
+  await page.getByRole("button", { name: "Abrir menu" }).tap()
+  await page.getByRole("dialog", { name: "Menu" }).waitFor()
+  await shot(page, "landing-390-menu")
+  await page.getByRole("dialog", { name: "Menu" }).getByRole("link", { name: "Como funciona" }).tap()
+  await page.getByRole("dialog", { name: "Menu" }).waitFor({ state: "detached" })
+  await page.waitForTimeout(900)
+  const top = await page.locator("#como-funciona").evaluate((e) => Math.round(e.getBoundingClientRect().top))
+  check("menu mobile fecha e leva à seção", new URL(page.url()).hash === "#como-funciona" && Math.abs(top) < 120, `top=${top}`)
+  const st = await page.evaluate(() => scrollY)
+  await page.getByRole("button", { name: "Abrir menu" }).tap()
+  await page.getByRole("dialog", { name: "Menu" }).getByRole("button", { name: "Criar conta" }).tap()
+  await page.getByRole("dialog", { name: "Criar conta" }).waitFor()
+  check("menu mobile abre o cadastro", st > 0)
+  await context.close()
+}
+for (const [width, height, view, name] of [[320, 568, "criar-conta", "criar-conta-320"], [390, 844, "entrar", "entrar-390"], [390, 844, "criar-conta", "criar-conta-390"]]) {
+  const { page, context } = await open({ width, height })
+  await page.goto(`${BASE}/?auth=${view}`, { waitUntil: "networkidle" })
+  await dialog(page).waitFor()
+  const box = await dialog(page).boundingBox()
+  check(`popup ${name}: cabe na tela`, box.x >= 0 && box.x + box.width <= width && box.y >= 0 && box.y + box.height <= height, `${Math.round(box.width)}x${Math.round(box.height)}`)
+  const closeBox = await dialog(page).getByRole("button", { name: "Fechar" }).boundingBox()
+  check(`popup ${name}: fechar visível e com 44px`, closeBox.y >= 0 && closeBox.height >= 44)
+  const submit = dialog(page).locator('button[type="submit"]')
+  await submit.scrollIntoViewIfNeeded()
+  const s = await submit.boundingBox()
+  check(`popup ${name}: botão alcançável`, s.y + s.height <= height, `${Math.round(s.y + s.height)}/${height}`)
+  const fs = await dialog(page).getByLabel("Email").evaluate((e) => getComputedStyle(e).fontSize)
+  check(`popup ${name}: campo com 16px no celular`, fs === "16px", fs)
+  await shot(page, `popup-${name}`)
+  await context.close()
+}
+for (const width of [390, 1440]) {
+  const { page, context } = await open({ width, height: width === 390 ? 844 : 900, theme: "light" })
+  await page.goto(BASE + "/", { waitUntil: "networkidle" })
+  await shot(page, `landing-${width}-claro`)
+  await page.goto(BASE + "/?auth=entrar", { waitUntil: "networkidle" })
+  await dialog(page).waitFor()
+  await shot(page, `popup-entrar-${width}-claro`)
+  await context.close()
+}
+{
+  const { page, context } = await open({})
+  await page.goto(BASE + "/", { waitUntil: "networkidle" })
+  const css = await page.evaluate(() => {
+    const cs = (e) => getComputedStyle(e)
+    const header = document.querySelector("header")
+    const button = document.querySelector("header button")
+    return { body: cs(document.body).backgroundColor, headerPos: cs(header).position, headerBg: cs(header).backgroundColor, btnH: button.offsetHeight, h1: cs(document.querySelector("h1")).fontFamily, h1Size: cs(document.querySelector("h1")).fontSize }
+  })
+  check("Tailwind aplicado na Landing", css.body === "rgb(13, 15, 18)" && css.headerPos === "fixed" && css.headerBg === "rgb(23, 26, 31)" && css.h1.includes("Barlow Condensed") && css.h1Size === "64px", JSON.stringify(css).slice(0, 160))
+  for (const [link, id] of [["Recursos", "beneficios"], ["Como funciona", "como-funciona"], ["Plataforma", "plataforma"], ["Perguntas", "perguntas"]]) {
+    await page.getByRole("navigation", { name: "Navegação pública" }).getByRole("link", { name: link }).click()
+    await page.waitForFunction((i) => Math.abs(document.getElementById(i).getBoundingClientRect().top) < 80, id, { timeout: 5000 }).catch(() => {})
+    const top = await page.locator(`#${id}`).evaluate((e) => Math.round(e.getBoundingClientRect().top))
+    check(`navegação: ${link}`, Math.abs(top) < 80, `top=${top}`)
+  }
+  await page.locator("footer").getByRole("button", { name: "Criar conta" }).click()
+  await dialog(page).getByRole("heading", { name: "Criar conta" }).waitFor()
+  check("chamada do rodapé abre o cadastro", true)
+  await page.keyboard.press("Escape")
+  const dead = await page.evaluate(() => [...document.querySelectorAll("a")].filter((a) => !a.getAttribute("href") || a.getAttribute("href") === "#").length)
+  check("nenhum link sem destino", dead === 0)
+  await context.close()
+}
+
+await browser.close()
+for (const g of ["REAL", "SIMULADO", "LAYOUT"]) {
+  const list = results.filter((r) => r.group === g)
+  console.log(`RESUMO ${g}: ${list.filter((r) => r.ok).length}/${list.length}`)
+}
+process.exit(results.some((r) => !r.ok) ? 1 : 0)

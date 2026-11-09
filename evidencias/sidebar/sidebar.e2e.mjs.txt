@@ -1,0 +1,98 @@
+import { chromium } from "playwright-core"
+import { mkdirSync } from "node:fs"
+
+const BASE = process.env.BASE ?? "http://localhost:4173"
+const OUT = process.argv[2]
+mkdirSync(OUT, { recursive: true })
+let ok = 0, bad = 0
+const check = (name, pass, detail = "") => { pass ? ok++ : bad++; console.log(`${pass ? "PASS" : "FAIL"}  ${name}${detail ? `  (${detail})` : ""}`) }
+
+const b64 = (o) => Buffer.from(JSON.stringify(o)).toString("base64url")
+const exp = () => Math.floor(Date.now() / 1000) + 3600
+const USER = { id: "00000000-0000-4000-8000-000000000001", aud: "authenticated", role: "authenticated", email: "teste@example.test", app_metadata: {}, user_metadata: { full_name: "Usuária Teste" }, identities: [{ id: "x" }], created_at: "2026-01-01T00:00:00Z" }
+const JWT = `${b64({ alg: "none" })}.${b64({ sub: USER.id, exp: exp(), role: "authenticated" })}.teste`
+const SESSION = { access_token: JWT, refresh_token: "teste", token_type: "bearer", expires_in: 3600, expires_at: exp(), user: USER }
+const shop = (papel) => ({ papel, barbershops: { id: "loja-1", nome: "Barbearia Fictícia", slug: "barbearia-ficticia", endereco: "Rua de Teste", status: "ativo", fuso: "America/Sao_Paulo" } })
+const now = Date.now()
+const BOOKING = { id: "b1", barbershop_id: "loja-1", professional_id: "p1", customer_id: "outro", service_id: "s1", servico_nome: "Corte", preco_centavos: 6000, duracao_min: 40, inicio: new Date(now - 60_000).toISOString(), fim: new Date(now + 39 * 60_000).toISOString(), status: "confirmado", cliente_nome: "Cliente Um", cliente_whatsapp: "11912345678", professionals: { nome: "Ana" }, barbershops: { nome: "Barbearia Fictícia", fuso: "America/Sao_Paulo", slug: "barbearia-ficticia" } }
+const TEAM = [{ id: "p1", nome: "Ana", ativo: true, professional_services: [{ service_id: "s1" }] }]
+
+const browser = await chromium.launch({ channel: "chrome", headless: true })
+async function open(papel, width = 1440, height = 900) {
+  const context = await browser.newContext({ viewport: { width, height }, hasTouch: width < 768 })
+  const page = await context.newPage()
+  const errors = []
+  page.on("pageerror", (e) => errors.push(e.message))
+  page.on("console", (m) => { if (m.type() === "error" && !/Failed to load resource/.test(m.text())) errors.push(m.text()) })
+  await context.addInitScript(({ s }) => { localStorage.setItem("barberia:theme", "dark"); if (!sessionStorage.getItem("__s")) { sessionStorage.setItem("__s", "1"); localStorage.setItem("sb-hbkbdqctelembzqiptpi-auth-token", JSON.stringify(s)) } }, { s: SESSION })
+  await context.route(/supabase\.co/, async (route) => {
+    const p = new URL(route.request().url()).pathname
+    const json = (b, st = 200) => route.fulfill({ status: st, contentType: "application/json", body: JSON.stringify(b) })
+    if (p === "/auth/v1/user") return json(USER)
+    if (p.endsWith("/rpc/get_team_links")) return json([])
+    if (p.includes("/rpc/")) return json(null)
+    if (p.startsWith("/rest/v1/memberships")) return json(papel === "barbeiro" && route.request().url().includes("papel=eq.barbeiro") ? [] : [shop(papel)])
+    if (p.startsWith("/rest/v1/bookings")) return json(papel === "cliente" ? [] : [BOOKING])
+    if (p.startsWith("/rest/v1/occupancies")) return json([])
+    if (p.startsWith("/rest/v1/professionals")) return json(TEAM)
+    if (p.startsWith("/rest/v1/services")) return json([{ id: "s1", nome: "Corte", descricao: null, preco_centavos: 6000, duracao_min: 40, ativo: true }])
+    if (p.startsWith("/rest/v1/working_hours")) return json([0,1,2,3,4,5,6].map((dow) => ({ professional_id: "p1", dow, inicio_min: 540, fim_min: 1080 })))
+    if (p.startsWith("/rest/v1/invites")) return json([])
+    return route.abort()
+  })
+  return { page, context, errors }
+}
+
+const labels = (page, i = 0) => page.getByRole("navigation", { name: "Navegação principal" }).nth(i).getByRole("link").evaluateAll((els) => els.map((e) => (e.getAttribute("title") || e.textContent).trim()))
+const ow = (page) => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)
+
+// Proprietário: sidebar completa e cada rota abre a tela certa
+{
+  const { page, context, errors } = await open("proprietario", 1440, 900)
+  await page.goto(BASE + "/dashboard", { waitUntil: "load" })
+  await page.getByRole("link", { name: "Clientes" }).first().waitFor()
+  const l = await labels(page)
+  check("proprietário: sidebar na ordem esperada", JSON.stringify(l) === JSON.stringify(["Início", "Agendamentos", "Clientes", "Serviços", "Equipe", "Horários", "Minhas reservas", "Página pública", "Mais"]), l.join(" | "))
+  for (const [nome, url, h1] of [["Agendamentos", "/dashboard/agendamentos", "Agendamentos"], ["Clientes", "/dashboard/clientes", "Clientes"], ["Serviços", "/dashboard/servicos", "Serviços"], ["Equipe", "/dashboard/equipe", "Equipe"], ["Horários", "/dashboard/horarios", "Horários de atendimento"], ["Mais", "/dashboard/mais", "Mais"], ["Início", "/dashboard", null]]) {
+    await page.getByRole("navigation", { name: "Navegação principal" }).first().getByRole("link", { name: nome, exact: true }).click()
+    await page.waitForURL(BASE + url)
+    if (h1) await page.getByRole("heading", { level: 1, name: h1 }).waitFor()
+    check(`proprietário: sidebar → ${url}`, (await page.locator('aside a[aria-current="page"]').getAttribute("href")) === url)
+  }
+  await page.getByRole("heading", { name: "Indicadores" }).waitFor()
+  const ind = await page.getByRole("region", { name: "Indicadores" }).innerText()
+  check("painel: 4 indicadores e ocupação calculada", /Ocupação \(7 dias\)\s*\n?\s*1%/.test(ind) && /Atendimentos hoje/.test(ind), ind.replace(/\n/g, " | ").slice(0, 150))
+  await page.screenshot({ path: `${OUT}/sidebar-painel-1440.png` })
+  await page.getByRole("navigation", { name: "Navegação principal" }).first().getByRole("link", { name: "Minhas reservas" }).click()
+  await page.waitForURL(BASE + "/minhas-reservas")
+  check("proprietário: sidebar → /minhas-reservas", true)
+  await page.goto(BASE + "/dashboard", { waitUntil: "load" })
+  await page.getByRole("link", { name: "Página pública" }).first().click()
+  await page.waitForURL(BASE + "/e/barbearia-ficticia")
+  check("proprietário: sidebar → /e/barbearia-ficticia", true)
+  check("proprietário: sem exceção de aplicação", errors.length === 0, errors.join(" | ").slice(0, 100))
+  await context.close()
+}
+for (const [papel, esperado] of [["gerente", ["Início", "Agendamentos", "Clientes", "Serviços", "Equipe", "Horários", "Minhas reservas", "Página pública", "Mais"]], ["barbeiro", ["Início", "Agendamentos", "Clientes", "Serviços", "Equipe", "Minhas reservas", "Página pública", "Mais"]], ["cliente", ["Início", "Minhas reservas", "Mais"]]]) {
+  const { page, context } = await open(papel, 1440, 900)
+  await page.goto(BASE + "/dashboard", { waitUntil: "load" })
+  await page.getByRole("heading", { level: 1 }).waitFor()
+  await page.waitForTimeout(500)
+  const l = await labels(page)
+  check(`${papel}: sidebar mostra só o que pode usar`, JSON.stringify(l) === JSON.stringify(esperado), l.join(" | "))
+  await context.close()
+}
+// Responsivo
+for (const [w, h] of [[390, 844], [768, 1024], [1024, 768]]) {
+  const { page, context } = await open("proprietario", w, h)
+  await page.goto(BASE + "/dashboard", { waitUntil: "load" })
+  await page.getByRole("heading", { name: "Indicadores" }).waitFor()
+  check(`${w}px: sem scroll horizontal`, (await ow(page)) <= 0)
+  if (w < 768) check(`${w}px: barra inferior com 5 destinos`, (await labels(page, 1)).length === 5)
+  else { const l = await labels(page); check(`${w}px: sidebar com ${l.length} rotas (${w < 1024 ? "só ícones" : "completa"})`, l.length === 9) }
+  await page.screenshot({ path: `${OUT}/sidebar-${w}.png` })
+  await context.close()
+}
+await browser.close()
+console.log(`RESUMO: ${ok}/${ok + bad} aprovadas`)
+process.exit(bad ? 1 : 0)

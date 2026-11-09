@@ -1,0 +1,104 @@
+do $$
+declare
+  a uuid := '11111111-1111-4111-8111-0000000000a1';
+  c uuid := '22222222-2222-4222-8222-0000000000c1';
+  d uuid := '33333333-3333-4333-8333-0000000000d1';
+  lj uuid; sv uuid; pr uuid; dia date; sl timestamptz; sls timestamptz[]; b1 uuid; b2 uuid; b3 uuid; bk uuid; blq uuid; n int; v jsonb; r text := '';
+begin
+  begin
+  insert into auth.users (id, aud, role, email, email_confirmed_at, raw_user_meta_data) values
+    (a, 'authenticated', 'authenticated', 'dono@jornada.test', now(), '{"full_name":"Dono"}'),
+    (c, 'authenticated', 'authenticated', 'cliente1@jornada.test', now(), '{"full_name":"Cliente 1"}'),
+    (d, 'authenticated', 'authenticated', 'cliente2@jornada.test', now(), '{"full_name":"Cliente 2"}');
+  dia := (now() at time zone 'America/Sao_Paulo')::date + 1;
+
+  -- DONO: cria barbearia, serviço, profissional e jornada
+  perform set_config('request.jwt.claim.sub', a::text, true); set local role authenticated;
+  lj := public.create_barbershop('Barbearia Jornada', 'jornada-real-teste');
+  insert into public.services (barbershop_id, nome, preco_centavos, duracao_min) values (lj, 'Corte', 6000, 40) returning id into sv;
+  pr := public.save_professional(lj, null, 'Ana', true, array[sv]);
+  perform public.save_working_hours(pr, (select jsonb_agg(x) from (
+    select jsonb_build_object('dow', g, 'inicio_min', 540, 'fim_min', 720) x from generate_series(0, 6) g
+    union all select jsonb_build_object('dow', g, 'inicio_min', 780, 'fim_min', 1080) from generate_series(0, 6) g) t));
+  r := r || 'PASS dono cria barbearia, servico, profissional e jornada' || E'\n';
+  reset role;
+
+  -- VISITANTE: pagina publica e horarios, sem login
+  set local role anon;
+  v := public.get_public_shop('jornada-real-teste');
+  r := r || case when v->>'nome' = 'Barbearia Jornada' and jsonb_array_length(v->'services') = 1 and jsonb_array_length(v->'professionals') = 1 then 'PASS' else 'FAIL' end || ' visitante ve a pagina publica (servicos e equipe)' || E'\n';
+  select array_agg(slot_inicio order by slot_inicio) into sls from public.get_availability(lj, sv, null, dia);
+  r := r || case when coalesce(cardinality(sls), 0) >= 20 then 'PASS' else 'FAIL' end || ' visitante ve horarios livres (' || coalesce(cardinality(sls), 0) || ')' || E'\n';
+  begin perform 1 from public.bookings; r := r || 'FAIL visitante leu reservas' || E'\n'; exception when others then r := r || 'PASS visitante nao le tabelas' || E'\n'; end;
+  begin perform public.create_booking(lj, sv, null, sls[1], 'X', '11912345678', false, false, null); r := r || 'FAIL visitante reservou' || E'\n'; exception when others then r := r || 'PASS visitante nao reserva sem login' || E'\n'; end;
+  reset role;
+
+  -- CLIENTE 1: reserva
+  perform set_config('request.jwt.claim.sub', c::text, true); set local role authenticated;
+  b1 := public.create_booking(lj, sv, null, sls[1], 'Cliente 1', '(11) 91234-5678', true, false, 'k1');
+  r := r || 'PASS cliente 1 reserva o primeiro horario' || E'\n';
+  r := r || case when public.create_booking(lj, sv, null, sls[1], 'Cliente 1', '(11) 91234-5678', true, false, 'k1') = b1 then 'PASS' else 'FAIL' end || ' repetir a requisicao nao duplica (idempotencia)' || E'\n';
+  select count(*) into n from public.get_availability(lj, sv, null, dia) where slot_inicio = sls[1];
+  r := r || case when n = 0 then 'PASS' else 'FAIL' end || ' o horario reservado some da lista' || E'\n';
+  select count(*) into n from public.bookings;
+  r := r || case when n = 1 then 'PASS' else 'FAIL' end || ' cliente 1 ve so as proprias reservas' || E'\n';
+  reset role;
+
+  -- CLIENTE 2: nao reserva o mesmo horario, nao ve reserva alheia
+  perform set_config('request.jwt.claim.sub', d::text, true); set local role authenticated;
+  begin perform public.create_booking(lj, sv, pr, sls[1], 'Cliente 2', '11999998888', false, false, null); r := r || 'FAIL reserva duplicada aceita' || E'\n';
+  exception when others then r := r || 'PASS cliente 2 nao reserva o mesmo horario (' || sqlerrm || E')\n'; end;
+  begin perform public.create_booking(lj, sv, null, sls[2], 'Cliente 2', '11999998888', false, false, null); r := r || 'FAIL horario sobreposto aceito' || E'\n';
+  exception when others then r := r || 'PASS horario sobreposto de 15 min depois e recusado' || E'\n'; end;
+  select count(*) into n from public.bookings;
+  r := r || case when n = 0 then 'PASS' else 'FAIL' end || ' cliente 2 nao ve reservas do cliente 1' || E'\n';
+  begin perform public.cancel_booking(b1); r := r || 'FAIL cancelou reserva alheia' || E'\n'; exception when others then r := r || 'PASS cliente 2 nao cancela reserva alheia' || E'\n'; end;
+  b2 := public.create_booking(lj, sv, null, sls[1] + interval '45 minutes', 'Cliente 2', '11999998888', false, false, null);
+  r := r || 'PASS reserva colada ao fim da anterior (45 min depois) e aceita' || E'\n';
+  reset role;
+
+  -- DONO: ve a agenda, bloqueia, conclui
+  perform set_config('request.jwt.claim.sub', a::text, true); set local role authenticated;
+  select count(*) into n from public.bookings;
+  r := r || case when n = 2 then 'PASS' else 'FAIL' end || ' dono ve as 2 reservas da barbearia' || E'\n';
+  blq := public.create_block(lj, pr, sls[11], sls[11] + interval '1 hour', 'Medico');
+  begin perform public.create_block(lj, pr, sls[1], sls[1] + interval '30 minutes', null); r := r || 'FAIL bloqueio sobre reserva' || E'\n';
+  exception when others then r := r || 'PASS bloqueio sobre uma reserva e recusado' || E'\n'; end;
+  reset role;
+  perform set_config('request.jwt.claim.sub', c::text, true); set local role authenticated;
+  begin perform public.create_booking(lj, sv, pr, sls[11], 'Cliente 1', '11912345678', false, false, null); r := r || 'FAIL reserva sobre bloqueio' || E'\n';
+  exception when others then r := r || 'PASS reserva sobre um bloqueio e recusada' || E'\n'; end;
+  reset role;
+  perform set_config('request.jwt.claim.sub', a::text, true); set local role authenticated;
+  perform public.delete_block(blq);
+  begin perform public.set_booking_status(b1, 'concluido'); r := r || 'FAIL concluiu antes da hora' || E'\n'; exception when others then r := r || 'PASS nao conclui reserva futura' || E'\n'; end;
+  reset role;
+  update public.bookings set inicio = now() - interval '2 hours', fim = now() - interval '80 minutes' where id = b1;
+  perform set_config('request.jwt.claim.sub', a::text, true); set local role authenticated;
+  perform public.set_booking_status(b1, 'concluido');
+  r := r || 'PASS dono conclui o atendimento depois do horario' || E'\n';
+  reset role;
+
+  -- CLIENTE 1: reagenda e cancela; limite de 3
+  perform set_config('request.jwt.claim.sub', c::text, true); set local role authenticated;
+  b3 := public.create_booking(lj, sv, null, sls[17], 'Cliente 1', '11912345678', false, false, null);
+  perform public.reschedule_booking(b3, sls[25], pr);
+  select count(*) into n from public.get_availability(lj, sv, null, dia) where slot_inicio = sls[17];
+  r := r || case when n = 1 then 'PASS' else 'FAIL' end || ' reagendar libera o horario antigo' || E'\n';
+  begin perform public.reschedule_booking(b3, sls[1] + interval '45 minutes', pr); r := r || 'FAIL reagendou para horario ocupado' || E'\n';
+  exception when others then r := r || 'PASS reagendar para horario ocupado falha' || E'\n'; end;
+  select inicio into sl from public.bookings where id = b3;
+  r := r || case when sl = sls[25] then 'PASS' else 'FAIL' end || ' reserva continua no horario anterior apos a falha' || E'\n';
+  perform public.cancel_booking(b3);
+  r := r || 'PASS cliente cancela a propria reserva' || E'\n';
+  perform public.create_booking(lj, sv, null, sls[11], 'Cliente 1', '11912345678', false, false, null);
+  perform public.create_booking(lj, sv, null, sls[14], 'Cliente 1', '11912345678', false, false, null);
+  perform public.create_booking(lj, sv, null, sls[17], 'Cliente 1', '11912345678', false, false, null);
+  begin perform public.create_booking(lj, sv, null, sls[20], 'Cliente 1', '11912345678', false, false, null); r := r || 'FAIL passou do limite de 3' || E'\n';
+  exception when others then r := r || 'PASS 4a reserva futura ativa e recusada (' || sqlerrm || E')\n'; end;
+  reset role;
+
+  exception when others then r := r || 'ERRO INESPERADO: ' || sqlerrm || E'\n';
+  end;
+  raise exception E'TOTAL PASS=% FAIL=% | FINAL: %', cardinality(regexp_split_to_array(r, 'PASS ')) - 1, cardinality(regexp_split_to_array(r, 'FAIL ')) - 1, right(r, 520);
+end $$;

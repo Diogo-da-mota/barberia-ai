@@ -1,0 +1,43 @@
+import { Scissors } from "lucide-react"
+import { Dialog, DialogContent } from "@/ui/dialog"
+import type { AuthView } from "../domain"
+import { LoginForm, RecoverForm, SignUpForm } from "./AuthForms"
+
+type AuthDialogProps = {
+  open: boolean
+  view: AuthView | null
+  next: string
+  notice: string | null
+  onViewChange: (view: AuthView) => void
+  onClose: () => void
+}
+
+/** Foto de barbearia (Unsplash). Se não carregar, o fundo em degradê abaixo continua bonito. */
+const HERO = "https://images.unsplash.com/photo-1503951914875-452162b0f3f1?auto=format&fit=crop&w=1200&q=80"
+
+/**
+ * Acesso (entrar, criar conta, recuperar senha). Desktop: foto à esquerda e formulário à direita.
+ * Celular: só o formulário, sem foto.
+ */
+export function AuthDialog({ open, view, next, notice, onViewChange, onClose }: AuthDialogProps) {
+  return (
+    <Dialog open={open} onOpenChange={(isOpen) => !isOpen && onClose()}>
+      <DialogContent className="max-h-[92dvh] w-[calc(100%-2rem)] max-w-[480px] gap-0 overflow-hidden bg-card p-0 md:grid md:min-h-[640px] md:max-w-[960px] md:grid-cols-2 md:rounded-3xl">
+        <aside aria-hidden="true" className="relative hidden md:block">
+          <div className="animate-slide-left absolute inset-3 overflow-hidden rounded-2xl bg-gradient-to-br from-primary/40 via-surface-alt to-background bg-cover bg-center" style={{ backgroundImage: `linear-gradient(to top, rgb(0 0 0 / 0.75), rgb(0 0 0 / 0.1) 55%), url(${HERO})` }}>
+            <div className="absolute inset-x-0 bottom-0 flex flex-col gap-2 p-8 text-white">
+              <span className="flex size-10 items-center justify-center rounded-xl bg-primary text-primary-foreground"><Scissors className="size-5" /></span>
+              <p className="font-display text-3xl leading-tight font-bold tracking-wide">Seu horário, do seu jeito.</p>
+              <p className="text-sm text-white/80">Agende, reagende e acompanhe suas reservas em poucos toques.</p>
+            </div>
+          </div>
+        </aside>
+        <div className="flex max-h-[92dvh] flex-col justify-center gap-5 overflow-y-auto p-6 md:p-10">
+          {view === "entrar" && <LoginForm next={next} notice={notice} onViewChange={onViewChange} />}
+          {view === "criar-conta" && <SignUpForm next={next} onViewChange={onViewChange} />}
+          {view === "recuperar" && <RecoverForm onViewChange={onViewChange} />}
+        </div>
+      </DialogContent>
+    </Dialog>
+  )
+}

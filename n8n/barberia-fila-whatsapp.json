@@ -1,0 +1,88 @@
+{
+  "name": "Barberia AI — fila do WhatsApp (confirmações e lembretes)",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Barberia AI — fila do WhatsApp\nA cada minuto chama o **outbox-worker** (Supabase) com `escopo: confirmacoes_lembretes`. O worker:\n1. agenda os lembretes (`schedule_reminders`) e o retorno do cliente (`schedule_reactivation`);\n2. reivindica confirmações, lembretes e retornos (`claim_whatsapp_outbox`);\n3. envia pela instância Evolution de cada barbearia;\n4. registra o resultado na fila (`complete_outbox`).\n\n**Antes de ativar:** no nó *Agendar e entregar*, crie a credencial do tipo **Header Auth** com Name `x-worker-secret` e Value igual ao secret `WORKER_SECRET` do Supabase. Nenhum segredo fica neste JSON.\nUma falha aparece como execução com erro (execuções com sucesso não são salvas).",
+        "height": 340,
+        "width": 560,
+        "color": 4
+      },
+      "id": "5b0c4f0e-1a2b-4c3d-8e9f-000000000001",
+      "name": "Leia antes de ativar",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -60,
+        -400
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 1
+            }
+          ]
+        }
+      },
+      "id": "5b0c4f0e-1a2b-4c3d-8e9f-000000000002",
+      "name": "A cada minuto",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://hbkbdqctelembzqiptpi.supabase.co/functions/v1/outbox-worker",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\n  \"escopo\": \"confirmacoes_lembretes\"\n}",
+        "options": {
+          "timeout": 55000
+        }
+      },
+      "id": "5b0c4f0e-1a2b-4c3d-8e9f-000000000003",
+      "name": "Agendar e entregar (outbox-worker)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        260,
+        0
+      ],
+      "notes": "Resposta: { agendados, recebidos, enviados, falhas }. 403 = credencial errada; 503 = secrets da Evolution ausentes no Supabase."
+    }
+  ],
+  "connections": {
+    "A cada minuto": {
+      "main": [
+        [
+          {
+            "node": "Agendar e entregar (outbox-worker)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "America/Sao_Paulo",
+    "saveDataSuccessExecution": "none",
+    "saveDataErrorExecution": "all",
+    "saveManualExecutions": true,
+    "executionTimeout": 60
+  },
+  "pinData": {},
+  "tags": []
+}

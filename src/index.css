@@ -1,0 +1,210 @@
+@import "tailwindcss";
+
+/*
+! Tokens do Design System — Barberia AI
+Fonte obrigatória: Design Sytem.md (seção 3).
+Usar sempre os tokens via var(--*) ou utilitários Tailwind mapeados abaixo.
+Nunca usar hexadecimais soltos nos componentes.
+*/
+
+@theme {
+  --color-background: var(--background);
+  --color-card: var(--card);
+  --color-surface-alt: var(--surface-alt);
+  --color-foreground: var(--foreground);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+  --color-input: var(--border);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-link: var(--link);
+  --color-income: var(--income);
+  --color-expense: var(--expense);
+  --color-warning: var(--warning);
+  --color-danger: var(--danger);
+  --color-info: var(--info);
+
+  --radius-sm: var(--radius-sm);
+  --radius-md: var(--radius-md);
+  --radius-card: var(--radius-card);
+
+  --font-body: var(--font-body);
+  --font-display: var(--font-display);
+}
+
+/* Light (padrão do token) */
+:root {
+  --background: #F1F1EC;
+  --card: #FFFFFF;
+  --surface-alt: #E8E8E1;
+  --foreground: #15171A;
+  --muted-foreground: #585D65;
+  --border: #D9D9D0;
+  --primary: #FFB000;
+  --primary-foreground: #15171A;
+  --link: #8A5700;
+  --income: #157347;
+  --expense: #C8381C;
+  --warning: #8A5700;
+  --danger: #B42318;
+  --info: #1F5FBF;
+
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-card: 16px;
+
+  --font-body: "Barlow", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Barlow Condensed", ui-sans-serif, system-ui, sans-serif;
+  /* serifadas dos modelos de site Clássico e Premium (só o site público usa) */
+  --font-classico: "Playfair Display", Georgia, "Times New Roman", serif;
+  --font-premium: "Cormorant Garamond", Georgia, "Times New Roman", serif;
+}
+
+/* Dark — padrão da aplicação (F01-03) */
+.dark {
+  --background: #09090B;
+  --card: #111214;
+  --surface-alt: #1A1C20;
+  --foreground: #F2F2EC;
+  --muted-foreground: #A2A7AF;
+  --border: #2A2D32;
+  --primary: #FFB000;
+  --primary-foreground: #121417;
+  --link: #FFBE33;
+  --income: #4CC38A;
+  --expense: #FF6A4D;
+  --warning: #FFB000;
+  --danger: #FF6A4D;
+  --info: #6AA8FF;
+}
+
+/* Board (painel de embarque — seção 3.2) */
+:root {
+  --board: #121417;
+  --board-foreground: #F4F4EF;
+  --board-muted: #8E939A;
+  --board-line: #262A30;
+  --board-amber: #FFB000;
+  --board-alert: #FF5A3C;
+}
+.dark {
+  --board: #07080A;
+  --board-foreground: #F2F2EC;
+  --board-muted: #8E939A;
+  --board-line: #1D2126;
+  --board-amber: #FFB000;
+  --board-alert: #FF6A4D;
+}
+
+@theme {
+  --color-board: var(--board);
+  --color-board-foreground: var(--board-foreground);
+  --color-board-muted: var(--board-muted);
+  --color-board-line: var(--board-line);
+  --color-board-amber: var(--board-amber);
+  --color-board-alert: var(--board-alert);
+}
+
+/* Categorias (seção 3.3) — validadas para CVD */
+:root {
+  --cat-blue: #2a78d6;
+  --cat-orange: #eb6834;
+  --cat-aqua: #12a07a;
+  --cat-yellow: #b27a00;
+  --cat-magenta: #c2417a;
+  --cat-green: #008300;
+  --cat-violet: #6250d6;
+  --cat-red: #e34948;
+  --cat-slate: #64748b;
+}
+.dark {
+  --cat-blue: #3987e5;
+  --cat-orange: #d95926;
+  --cat-aqua: #199e70;
+  --cat-yellow: #c98500;
+  --cat-magenta: #d55181;
+  --cat-green: #008300;
+  --cat-violet: #9085e9;
+  --cat-red: #e66767;
+  --cat-slate: #94a3b8;
+}
+
+@theme {
+  --color-cat-blue: var(--cat-blue);
+  --color-cat-orange: var(--cat-orange);
+  --color-cat-aqua: var(--cat-aqua);
+  --color-cat-yellow: var(--cat-yellow);
+  --color-cat-magenta: var(--cat-magenta);
+  --color-cat-green: var(--cat-green);
+  --color-cat-violet: var(--cat-violet);
+  --color-cat-red: var(--cat-red);
+  --color-cat-slate: var(--cat-slate);
+}
+
+@utility font-variant-numeric-tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-body);
+  margin: 0;
+}
+
+/* Respeitar redução de movimento (seção 16/18) */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Foco visível para navegação por teclado */
+:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+/* Entrada suave dos formulários de acesso (desktop com foto). Respeita "reduzir movimento". */
+@keyframes fadeSlideIn {
+  to { opacity: 1; filter: blur(0px); transform: translateY(0px); }
+}
+@keyframes slideLeftIn {
+  to { opacity: 1; filter: blur(0px); transform: translateX(0px); }
+}
+.animate-element {
+  opacity: 0; filter: blur(8px); transform: translateY(16px);
+  animation: fadeSlideIn 0.6s cubic-bezier(0.2, 0.7, 0.2, 1) forwards;
+}
+.animate-slide-left {
+  opacity: 0; filter: blur(8px); transform: translateX(-32px);
+  animation: slideLeftIn 0.7s cubic-bezier(0.2, 0.7, 0.2, 1) forwards;
+}
+.animate-delay-100 { animation-delay: 0.1s; }
+.animate-delay-200 { animation-delay: 0.2s; }
+.animate-delay-300 { animation-delay: 0.3s; }
+.animate-delay-400 { animation-delay: 0.4s; }
+.animate-delay-500 { animation-delay: 0.5s; }
+@media (prefers-reduced-motion: reduce) {
+  .animate-element, .animate-slide-left { animation: none; opacity: 1; filter: none; transform: none; }
+}
+
+/* Cor de destaque do usuário (site inteiro: público, painel e pop-ups). Vem de `data-accent` no <html>.
+   Valores idênticos a `src/lib/accent.ts` (conferidos por teste). O âmbar é o padrão e não precisa de bloco. */
+html[data-accent="azul"] { --primary: #3B82F6; --primary-foreground: #0B1220; --link: #1D4ED8; }
+html.dark[data-accent="azul"] { --link: #7CB0FF; }
+html[data-accent="verde"] { --primary: #22C55E; --primary-foreground: #0B1220; --link: #166534; }
+html.dark[data-accent="verde"] { --link: #4ADE80; }
+html[data-accent="vermelho"] { --primary: #EF4444; --primary-foreground: #0B1220; --link: #B91C1C; }
+html.dark[data-accent="vermelho"] { --link: #FF8A80; }
+html[data-accent="violeta"] { --primary: #7C3AED; --primary-foreground: #FFFFFF; --link: #6D28D9; }
+html.dark[data-accent="violeta"] { --link: #C4B5FD; }

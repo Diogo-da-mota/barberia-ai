@@ -1,0 +1,150 @@
+import { chromium } from "playwright-core"
+import { mkdirSync } from "node:fs"
+
+const BASE = process.env.BASE ?? "http://localhost:4173"
+const OUT = process.argv[2]
+mkdirSync(OUT, { recursive: true })
+let ok = 0, bad = 0
+const check = (name, pass, detail = "") => { pass ? ok++ : bad++; console.log(`${pass ? "PASS" : "FAIL"}  ${name}${detail ? `  (${detail})` : ""}`) }
+
+const b64 = (o) => Buffer.from(JSON.stringify(o)).toString("base64url")
+const exp = () => Math.floor(Date.now() / 1000) + 3600
+const USER = { id: "00000000-0000-4000-8000-000000000001", aud: "authenticated", role: "authenticated", email: "teste@example.test", app_metadata: {}, user_metadata: { full_name: "Usuária Teste" }, identities: [{ id: "x" }], created_at: "2026-01-01T00:00:00Z" }
+const JWT = `${b64({ alg: "none" })}.${b64({ sub: USER.id, exp: exp(), role: "authenticated" })}.teste`
+const SESSION = { access_token: JWT, refresh_token: "teste", token_type: "bearer", expires_in: 3600, expires_at: exp(), user: USER }
+const SHOP = { papel: "proprietario", barbershops: { id: "loja-1", nome: "Barbearia Fictícia", slug: "barbearia-ficticia", endereco: null, status: "ativo" } }
+const SERVICES = [
+  { id: "s1", nome: "Corte", descricao: "Social ou degradê", preco_centavos: 6000, duracao_min: 40, ativo: true },
+  { id: "s2", nome: "Barba", descricao: null, preco_centavos: 4050, duracao_min: 90, ativo: false },
+]
+const TEAM = [{ id: "p1", nome: "João", ativo: true, professional_services: [{ service_id: "s1" }] }]
+
+const browser = await chromium.launch({ channel: "chrome", headless: true })
+
+async function open({ width = 1440, height = 900, hasShop = true }) {
+  const context = await browser.newContext({ viewport: { width, height }, hasTouch: width < 768 })
+  const page = await context.newPage()
+  const log = { errors: [], posts: [] }
+  let shopExists = hasShop
+  page.on("pageerror", (e) => log.errors.push(e.message))
+  page.on("console", (m) => { if (m.type() === "error" && !/Failed to load resource/.test(m.text())) log.errors.push(m.text()) })
+  await context.addInitScript(({ session }) => {
+    localStorage.setItem("barberia:theme", "dark")
+    if (!sessionStorage.getItem("__seeded")) { sessionStorage.setItem("__seeded", "1"); localStorage.setItem("sb-hbkbdqctelembzqiptpi-auth-token", JSON.stringify(session)) }
+  }, { session: SESSION })
+  await context.route(/supabase\.co/, async (route) => {
+    const req = route.request(); const url = new URL(req.url()); const p = url.pathname; const json = (body, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) })
+    if (req.method() !== "GET" && p.startsWith("/rest/v1/")) log.posts.push({ path: p, body: req.postData() ? JSON.parse(req.postData()) : null })
+    if (p === "/auth/v1/user") return json(USER)
+    if (p === "/auth/v1/logout") return route.fulfill({ status: 204, body: "" })
+    if (p.startsWith("/rest/v1/rpc/create_barbershop")) { shopExists = true; return json("loja-1") }
+    if (p.startsWith("/rest/v1/rpc/save_professional")) return json("p9")
+    if (p.startsWith("/rest/v1/memberships")) return json(shopExists ? [SHOP] : [])
+    if (p.startsWith("/rest/v1/services")) return req.method() === "GET" ? json(SERVICES) : json([{ id: "novo" }], 201)
+    if (p.startsWith("/rest/v1/professionals")) return json(TEAM)
+    return route.abort()
+  })
+  return { page, context, log }
+}
+const overflow = (page) => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)
+const path = (page) => new URL(page.url()).pathname
+
+// Fluxo: sem barbearia -> criar
+{
+  const { page, context, log } = await open({ hasShop: false })
+  await page.goto(BASE + "/dashboard", { waitUntil: "load" })
+  await page.getByText("Nenhuma barbearia vinculada").waitFor()
+  await page.getByRole("link", { name: "Criar barbearia" }).click()
+  await page.waitForURL(BASE + "/dashboard/barbearias/nova")
+  await page.getByLabel("Nome da barbearia").fill("Barbearia do João")
+  check("endereço sugerido a partir do nome", (await page.getByLabel("Endereço público").inputValue()) === "barbearia-do-joao")
+  await page.screenshot({ path: `${OUT}/nova-barbearia-1440.png` })
+  await page.getByRole("button", { name: "Criar barbearia" }).click()
+  await page.waitForURL(BASE + "/dashboard")
+  await page.getByText("Barbearia Fictícia").waitFor()
+  const call = log.posts.find((p) => p.path.includes("create_barbershop"))
+  check("chama create_barbershop com nome e endereço", call?.body?.p_nome === "Barbearia do João" && call?.body?.p_slug === "barbearia-do-joao", JSON.stringify(call?.body))
+  check("lista a barbearia criada no painel", await page.getByText("Barbearia Fictícia").isVisible())
+  check("fluxo sem erro de aplicação", log.errors.length === 0, log.errors.join(" | ").slice(0, 160))
+  await context.close()
+}
+
+// Serviços
+{
+  const { page, context, log } = await open({})
+  await page.goto(BASE + "/dashboard/servicos", { waitUntil: "load" })
+  await page.getByText("Corte").first().waitFor()
+  const row = await page.evaluate(() => { const li = [...document.querySelectorAll("main li")].find((e) => e.textContent.includes("Corte")); return li.textContent })
+  check("serviço mostra duração e preço", /40 min/.test(row) && /R\$\s60,00/.test(row), row.slice(0, 80))
+  check("serviço inativo sinalizado", await page.getByText("Inativo").isVisible())
+  check("item Serviços marcado na sidebar", (await page.locator('aside a[aria-current="page"]').getAttribute("href")) === "/dashboard/servicos")
+  const css = await page.evaluate(() => ({ w: document.querySelector("main > div").offsetWidth, bg: getComputedStyle(document.querySelector("main ul").closest("div")).backgroundColor }))
+  check("lista com largura máxima de 768px e cor de painel", css.w === 768 && css.bg === "rgb(23, 26, 31)", JSON.stringify(css))
+  await page.screenshot({ path: `${OUT}/servicos-1440.png` })
+  await page.getByRole("button", { name: "Novo serviço" }).click()
+  const dlg = page.getByRole("dialog"); await dlg.waitFor()
+  await dlg.getByRole("button", { name: "Salvar serviço" }).click()
+  await dlg.getByText("Informe o nome do serviço.").waitFor()
+  check("validação do formulário no navegador", await dlg.getByText("Informe um valor válido, como 60,00.").isVisible())
+  await dlg.getByLabel("Nome").fill("Hidratação")
+  await dlg.getByLabel("Preço (R$)").fill("35,5")
+  await dlg.getByLabel("Duração (minutos)").fill("30")
+  await page.screenshot({ path: `${OUT}/servico-dialog-1440.png` })
+  await dlg.getByRole("button", { name: "Salvar serviço" }).click()
+  await dlg.waitFor({ state: "detached" })
+  const post = log.posts.find((p) => p.path.includes("/services"))
+  check("envia o preço em centavos inteiros", post?.body?.preco_centavos === 3550 && post?.body?.duracao_min === 30 && post?.body?.barbershop_id === "loja-1", JSON.stringify(post?.body))
+  check("serviços sem erro de aplicação", log.errors.length === 0, log.errors.join(" | ").slice(0, 160))
+  await context.close()
+}
+
+// Equipe
+{
+  const { page, context, log } = await open({})
+  await page.goto(BASE + "/dashboard/equipe", { waitUntil: "load" })
+  await page.getByText("João").waitFor()
+  check("equipe mostra os serviços do profissional", await page.getByRole("list", { name: "Serviços de João" }).getByText("Corte").isVisible())
+  await page.screenshot({ path: `${OUT}/equipe-1440.png` })
+  await page.getByRole("button", { name: "Editar João" }).click()
+  const dlg = page.getByRole("dialog"); await dlg.waitFor()
+  check("edição já vem com os serviços marcados", (await dlg.getByRole("checkbox", { name: "Corte" }).isChecked()) && !(await dlg.getByRole("checkbox", { name: "Barba" }).isChecked()))
+  await dlg.getByRole("checkbox", { name: "Barba" }).check()
+  await dlg.getByRole("button", { name: "Salvar profissional" }).click()
+  await dlg.waitFor({ state: "detached" })
+  const rpc = log.posts.find((p) => p.path.includes("save_professional"))
+  check("chama save_professional com os serviços marcados", rpc?.body?.p_id === "p1" && rpc?.body?.p_service_ids?.length === 2, JSON.stringify(rpc?.body))
+  check("equipe sem erro de aplicação", log.errors.length === 0, log.errors.join(" | ").slice(0, 160))
+  await context.close()
+}
+
+// Responsividade
+for (const [w, h] of [[320, 568], [390, 844], [768, 1024], [1024, 768], [1440, 900]]) {
+  for (const route of ["/dashboard/servicos", "/dashboard/equipe", "/dashboard/barbearias/nova"]) {
+    const { page, context } = await open({ width: w, height: h })
+    await page.goto(BASE + route, { waitUntil: "load" })
+    await page.getByRole("heading", { level: 1 }).waitFor()
+    await page.waitForTimeout(300)
+    const o = await overflow(page)
+    const nav = await page.evaluate(() => ({ bottom: !!document.querySelector("nav.fixed") && getComputedStyle(document.querySelector("nav.fixed")).display !== "none", items: document.querySelectorAll("nav.fixed a").length }))
+    const small = w < 768 ? await page.evaluate(() => [...document.querySelectorAll("main a, main button, nav.fixed a")].filter((e) => e.offsetParent && e.offsetHeight < 44).map((e) => (e.textContent || e.getAttribute("aria-label")).slice(0, 20) + ":" + e.offsetHeight)) : []
+    check(`${w}px ${route}: sem scroll horizontal`, o <= 0)
+    if (w < 768 && route === "/dashboard/servicos") check(`${w}px: barra inferior com 5 destinos e alvos >= 44px`, nav.bottom && nav.items === 5 && small.length === 0, small.join(", "))
+    if ([390, 1440].includes(w)) await page.screenshot({ path: `${OUT}${route.replace(/\//g, "-")}-${w}.png` })
+    await context.close()
+  }
+}
+{
+  const { page, context } = await open({ width: 390, height: 844 })
+  await page.goto(BASE + "/dashboard/servicos", { waitUntil: "load" })
+  await page.getByRole("button", { name: "Novo serviço" }).tap()
+  const dlg = page.getByRole("dialog"); await dlg.waitFor()
+  const box = await dlg.boundingBox()
+  const fs = await dlg.getByLabel("Nome").evaluate((e) => getComputedStyle(e).fontSize)
+  check("diálogo cabe no celular e usa fonte 16px nos campos", box.x >= 0 && box.x + box.width <= 390 && box.y + box.height <= 844 && fs === "16px", `${Math.round(box.width)}x${Math.round(box.height)} ${fs}`)
+  await page.screenshot({ path: `${OUT}/servico-dialog-390.png` })
+  await context.close()
+}
+
+await browser.close()
+console.log(`RESUMO: ${ok}/${ok + bad} aprovadas`)
+process.exit(bad ? 1 : 0)

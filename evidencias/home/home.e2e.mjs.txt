@@ -1,0 +1,329 @@
+import { chromium } from "playwright-core"
+import { mkdirSync } from "node:fs"
+
+const BASE = "http://localhost:5173"
+const OUT = process.argv[2]
+mkdirSync(OUT, { recursive: true })
+
+const results = []
+const check = (name, ok, detail = "") => {
+  results.push(ok)
+  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? `  [${detail}]` : ""}`)
+}
+
+// Sessão falsa, somente neste navegador de teste. Toda chamada ao Supabase é interceptada.
+const SESSION = {
+  access_token: "aaa.bbb.ccc",
+  refresh_token: "teste",
+  token_type: "bearer",
+  expires_in: 3600,
+  expires_at: Math.floor(Date.now() / 1000) + 3600,
+  user: {
+    id: "00000000-0000-4000-8000-000000000001",
+    aud: "authenticated",
+    role: "authenticated",
+    email: "teste@example.test",
+    app_metadata: {},
+    user_metadata: { full_name: "Usuária Teste" },
+    created_at: "2026-01-01T00:00:00Z",
+  },
+}
+
+const FICTICIO = [
+  { papel: "proprietario", barbershops: { id: "b1", nome: "Barbearia Fictícia Centro", slug: "ficticia-centro", endereco: "Rua de Teste, Centro", status: "ativo" } },
+  { papel: "barbeiro", barbershops: { id: "b2", nome: "Barbearia Fictícia com um nome bem comprido para testar corte", slug: "ficticia-sul", endereco: "Avenida de Teste com endereço também bem comprido, Zona Sul", status: "ativo" } },
+  { papel: "gerente", barbershops: { id: "b3", nome: "Barbearia Fictícia Norte", slug: "ficticia-norte", endereco: null, status: "inativo" } },
+]
+
+const RESPONSES = {
+  unavailable: { status: 404, body: { code: "PGRST205", message: "tabela ausente" } },
+  empty: { status: 200, body: [] },
+  populated: { status: 200, body: FICTICIO },
+  customer: { status: 200, body: [{ ...FICTICIO[0], papel: "cliente" }] },
+  error: { status: 500, body: { code: "XX000", message: "detalhe interno" } },
+}
+
+const browser = await chromium.launch({ channel: "chrome", headless: true })
+
+async function open({ width, height = 900, state, session = true, theme = "dark", path = "/" }) {
+  const context = await browser.newContext({ viewport: { width, height }, hasTouch: width < 768 })
+  const page = await context.newPage()
+  const log = { pageErrors: [], consoleErrors: [], outgoing: [] }
+  page.on("pageerror", (e) => log.pageErrors.push(e.message))
+  page.on("console", (m) => { if (m.type() === "error") log.consoleErrors.push(m.text()) })
+
+  await page.addInitScript(({ session, theme, sessionData }) => {
+    localStorage.setItem("barberia:theme", theme)
+    if (session && !sessionStorage.getItem("__logged_out")) {
+      localStorage.setItem("sb-hbkbdqctelembzqiptpi-auth-token", JSON.stringify(sessionData))
+    }
+  }, { session, theme, sessionData: SESSION })
+
+  if (session) {
+    let mode = state
+    await page.route(/\/rest\/v1\//, async (route) => {
+      log.outgoing.push(route.request().url())
+      if (mode === "loading") return // nunca responde
+      const { status, body } = RESPONSES[mode]
+      await route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) })
+    })
+    await page.route(/\/auth\/v1\//, async (route) => {
+      await page.evaluate(() => sessionStorage.setItem("__logged_out", "1")).catch(() => {})
+      await route.fulfill({ status: 204, body: "" })
+    })
+    page.setMode = (m) => { mode = m }
+  }
+
+  await page.goto(BASE + path, { waitUntil: "load" })
+  return { page, context, log }
+}
+
+const noOverflow = (page) => page.evaluate(() => {
+  const main = document.querySelector("main")
+  return {
+    doc: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    main: main ? main.scrollWidth - main.clientWidth : 0,
+  }
+})
+
+// ---------- 1. Sem sessão, sem nenhum mock ----------
+{
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } })
+  const page = await context.newPage()
+  const errors = []
+  page.on("pageerror", (e) => errors.push(e.message))
+  await page.goto(BASE + "/", { waitUntil: "load" })
+  await page.getByText("Entrar com o Google").waitFor()
+  check("sem sessão: / redireciona para /login", new URL(page.url()).pathname === "/login")
+  check("sem sessão: conteúdo privado não aparece", (await page.getByText("Próximos atendimentos").count()) === 0)
+  const btn = await page.getByRole("button", { name: "Continuar com o Google" }).evaluate((el) => {
+    const s = getComputedStyle(el); return { bg: s.backgroundColor, h: el.offsetHeight }
+  })
+  check("/login preservado: botão primário estilizado", btn.h === 40 && btn.bg !== "rgba(0, 0, 0, 0)", JSON.stringify(btn))
+  const box = await page.getByText("Entrar com o Google").boundingBox()
+  check("/login preservado: conteúdo centralizado", box.y > 200 && box.x > 400, `y=${Math.round(box.y)}`)
+  check("/login: sem exceção de aplicação", errors.length === 0)
+  await page.screenshot({ path: `${OUT}/login-1440.png` })
+  await page.goto(BASE + "/agendamentos", { waitUntil: "load" })
+  await page.getByText("Entrar com o Google").waitFor()
+  check("sem sessão: /agendamentos também é protegida", new URL(page.url()).pathname === "/login")
+  await context.close()
+}
+
+// ---------- 2. Renderização e CSS real ----------
+{
+  const { page, context, log } = await open({ width: 1440, state: "populated" })
+  await page.getByRole("heading", { level: 1, name: "Olá, Usuária" }).waitFor()
+  await page.getByText("Barbearia Fictícia Centro").waitFor()
+  const css = await page.evaluate(() => {
+    const cs = (el) => getComputedStyle(el)
+    const board = document.querySelector("section.bg-board")
+    const panel = document.querySelector("section .border-border") ?? document.querySelector(".rounded-card.border")
+    const h1 = document.querySelector("h1")
+    const aside = document.querySelector("aside")
+    const content = document.querySelector("main > div")
+    return {
+      bodyBg: cs(document.body).backgroundColor,
+      boardBg: cs(board).backgroundColor,
+      boardRadius: cs(board).borderRadius,
+      panelRadius: cs(panel).borderRadius,
+      panelBorder: cs(panel).borderTopColor,
+      h1Font: cs(h1).fontFamily,
+      h1Size: cs(h1).fontSize,
+      bodyFont: cs(document.body).fontFamily,
+      asideW: aside.offsetWidth,
+      contentW: content.offsetWidth,
+      rootH: document.querySelector("#root > div").offsetHeight,
+      vh: innerHeight,
+    }
+  })
+  check("CSS: fundo dark do token", css.bodyBg === "rgb(13, 15, 18)", css.bodyBg)
+  check("CSS: board usa token", css.boardBg === "rgb(7, 8, 10)", css.boardBg)
+  check("CSS: raio de card do DS (6/20/6/20)", css.boardRadius === "6px 20px" && css.panelRadius === "6px 20px", `${css.boardRadius} | ${css.panelRadius}`)
+  check("CSS: borda do token, não currentColor", css.panelBorder === "rgb(44, 49, 56)", css.panelBorder)
+  check("CSS: Barlow Condensed no h1, 28px", css.h1Font.includes("Barlow Condensed") && css.h1Size === "28px", css.h1Size)
+  check("CSS: Barlow no corpo", css.bodyFont.includes("Barlow"))
+  check("layout 1440: sidebar completa 240px", css.asideW === 240, `${css.asideW}`)
+  check("layout 1440: conteúdo com max-width 1120", css.contentW === 1120, `${css.contentW}`)
+  check("layout: altura h-dvh ocupa a janela", css.rootH === css.vh, `${css.rootH}/${css.vh}`)
+  check("segurança: consulta filtra pelo usuário da sessão", log.outgoing.some((u) => u.includes(`profile_id=eq.${SESSION.user.id}`)))
+  check("sem exceção de aplicação", log.pageErrors.length === 0, log.pageErrors.join(" | "))
+  check("sem erro no console", log.consoleErrors.length === 0, log.consoleErrors.join(" | ").slice(0, 200))
+  await page.screenshot({ path: `${OUT}/home-dados-ficticios-1440.png` })
+  await context.close()
+}
+
+// ---------- 3. Estados ----------
+{
+  const s = await open({ width: 1440, state: "unavailable" })
+  await s.page.getByText("Cadastro de barbearias indisponível").waitFor()
+  check("estado banco indisponível (resposta real PGRST205)", true)
+  check("indisponível: indicadores sem número", /^Indicadores.*/.test(await s.page.getByRole("region", { name: "Indicadores" }).innerText()) && !/\d/.test(await s.page.getByRole("region", { name: "Indicadores" }).innerText()))
+  check("indisponível: sem exceção de aplicação", s.log.pageErrors.length === 0)
+  console.log(`INFO  console em estado indisponível: ${s.log.consoleErrors.map((e) => e.slice(0, 70)).join(" | ") || "nenhum"}`)
+  await s.page.screenshot({ path: `${OUT}/home-estado-atual-1440.png` })
+  await s.context.close()
+
+  const e = await open({ width: 390, state: "empty" })
+  await e.page.getByText("Nenhuma barbearia vinculada").waitFor()
+  check("estado vazio", true)
+  await e.context.close()
+
+  const l = await open({ width: 1440, state: "loading" })
+  await l.page.getByRole("status", { name: "Carregando suas barbearias" }).waitFor()
+  check("estado carregando: skeleton", (await l.page.locator(".animate-pulse").count()) >= 2)
+  await l.page.screenshot({ path: `${OUT}/home-carregando-1440.png` })
+  await l.context.close()
+
+  const x = await open({ width: 1440, state: "error" })
+  await x.page.getByRole("alert").waitFor({ timeout: 15000 })
+  check("estado erro: sem detalhe interno", !(await x.page.locator("body").innerText()).includes("detalhe interno"))
+  await x.page.screenshot({ path: `${OUT}/home-erro-1440.png` })
+  x.page.setMode("populated")
+  await x.page.getByRole("button", { name: "Tentar novamente" }).click()
+  await x.page.getByText("Barbearia Fictícia Centro").waitFor()
+  check("estado erro: Tentar novamente recupera os dados", true)
+  await x.context.close()
+
+  const c = await open({ width: 1440, state: "customer" })
+  await c.page.getByRole("heading", { name: "Seus próximos agendamentos" }).waitFor()
+  check("cliente: sem indicadores internos", (await c.page.getByRole("region", { name: "Indicadores" }).count()) === 0)
+  await c.page.screenshot({ path: `${OUT}/home-cliente-1440.png` })
+  await c.context.close()
+}
+
+// ---------- 4. Responsividade nos breakpoints do DS ----------
+for (const width of [320, 360, 390, 768, 1024, 1440]) {
+  for (const state of ["populated", "unavailable"]) {
+    const { page, context } = await open({ width, state })
+    await page.getByRole("heading", { level: 1 }).waitFor()
+    await page.getByRole("heading", { name: "Suas barbearias" }).waitFor()
+    await page.getByRole("region", { name: "Indicadores" }).waitFor()
+    const over = await noOverflow(page)
+    check(`${width}px/${state}: sem scroll horizontal`, over.doc <= 0 && over.main <= 0, JSON.stringify(over))
+    const layout = await page.evaluate(() => {
+      const vis = (el) => !!el && getComputedStyle(el).display !== "none" && el.offsetWidth > 0
+      const aside = document.querySelector("aside")
+      const bottom = document.querySelector("nav.fixed")
+      const clipped = [...document.querySelectorAll("nav.fixed a span:last-child")].filter((s) => s.scrollWidth > s.parentElement.clientWidth).length
+      const main = document.querySelector("main")
+      main.scrollTop = main.scrollHeight
+      const last = main.firstElementChild.getBoundingClientRect()
+      return { aside: vis(aside), asideW: aside.offsetWidth, bottom: vis(bottom), clipped, lastBottom: last.bottom, navTop: vis(bottom) ? bottom.getBoundingClientRect().top : null }
+    })
+    if (width < 768) {
+      check(`${width}px/${state}: barra inferior, sem sidebar`, layout.bottom && !layout.aside)
+      check(`${width}px/${state}: rótulos da barra sem corte`, layout.clipped === 0, `${layout.clipped}`)
+      check(`${width}px/${state}: nav não cobre o fim do conteúdo`, layout.lastBottom <= layout.navTop, `${Math.round(layout.lastBottom)}<=${Math.round(layout.navTop)}`)
+      const small = await page.evaluate(() => [...document.querySelectorAll("nav.fixed a, header a, header button, main a, main button")].filter((e) => e.offsetHeight > 0 && e.offsetHeight < 44).map((e) => (e.textContent || e.getAttribute("aria-label")) + ":" + e.offsetHeight))
+      check(`${width}px/${state}: alvos de toque >= 44px`, small.length === 0, small.join(", "))
+    } else if (width < 1024) {
+      check(`${width}px/${state}: sidebar compacta 64px`, layout.aside && layout.asideW === 64 && !layout.bottom, `${layout.asideW}`)
+    } else {
+      check(`${width}px/${state}: sidebar completa`, layout.aside && layout.asideW === 240 && !layout.bottom, `${layout.asideW}`)
+    }
+    if ([390, 768, 1024, 1440].includes(width)) {
+      await page.evaluate(() => { document.querySelector("main").scrollTop = 0 })
+      await page.screenshot({ path: `${OUT}/home-${state === "unavailable" ? "estado-atual" : "dados-ficticios"}-${width}-dark.png`, fullPage: false })
+    }
+    await context.close()
+  }
+}
+
+// ---------- 5. Tema claro ----------
+for (const width of [390, 1440]) {
+  const { page, context } = await open({ width, state: "populated", theme: "light" })
+  await page.getByText("Barbearia Fictícia Centro").waitFor()
+  await page.screenshot({ path: `${OUT}/home-dados-ficticios-${width}-light.png` })
+  await context.close()
+}
+
+// ---------- 6. Interações ----------
+{
+  const { page, context, log } = await open({ width: 1440, state: "populated" })
+  await page.getByText("Barbearia Fictícia Centro").waitFor()
+
+  const before = await page.evaluate(() => document.documentElement.className)
+  await page.locator("aside").getByRole("button", { name: "Alternar tema" }).click()
+  const after = await page.evaluate(() => document.documentElement.className)
+  check("tema: alterna classe do html", before.includes("dark") && after.includes("light"), `${before} -> ${after}`)
+  await page.locator("aside").getByRole("button", { name: "Alternar tema" }).click()
+
+  await page.getByRole("link", { name: /Ver agenda/ }).click()
+  await page.getByRole("heading", { level: 1, name: "Agendamentos" }).waitFor()
+  check("Ver agenda navega", new URL(page.url()).pathname === "/agendamentos")
+  check("destino atual marcado na sidebar", (await page.locator('aside a[aria-current="page"]').getAttribute("href")) === "/agendamentos")
+
+  for (const [name, path] of [["Cartões", "/cartoes"], ["Contas", "/contas"], ["Mais", "/mais"], ["Início", "/"]]) {
+    await page.locator("aside nav").getByRole("link", { name }).click()
+    await page.waitForURL(BASE + path)
+    check(`sidebar navega para ${path}`, true)
+  }
+  await page.getByText("Barbearia Fictícia Centro").waitFor()
+  await page.getByRole("link", { name: /Página pública/ }).first().click()
+  await page.waitForURL(BASE + "/e/ficticia-centro")
+  check("Página pública navega para /e/slug", true)
+  await page.goBack()
+  await page.getByText("Barbearia Fictícia Centro").waitFor()
+
+  const dead = await page.evaluate(() => [...document.querySelectorAll("main a, main button, aside a, aside button")].filter((e) => e.tagName === "A" && !e.getAttribute("href")).length)
+  check("nenhum link sem destino", dead === 0)
+
+  await page.locator("aside").getByRole("button", { name: "Sair" }).click()
+  await page.getByText("Entrar com o Google").waitFor()
+  check("Sair: volta para /login", new URL(page.url()).pathname === "/login")
+  check("Sair: sessão removida do navegador", (await page.evaluate(() => localStorage.getItem("sb-hbkbdqctelembzqiptpi-auth-token"))) === null)
+  check("interações: sem exceção de aplicação", log.pageErrors.length === 0, log.pageErrors.join(" | "))
+  await context.close()
+}
+{
+  const { page, context } = await open({ width: 390, height: 844, state: "populated" })
+  await page.getByText("Barbearia Fictícia Centro").waitFor()
+  await page.locator("nav.fixed").getByRole("link", { name: "Agendamentos" }).tap()
+  await page.waitForURL(BASE + "/agendamentos")
+  check("barra inferior navega por toque", true)
+  await page.screenshot({ path: `${OUT}/agendamentos-placeholder-390.png` })
+  await context.close()
+}
+
+// ---------- 7. Paisagem, zoom e teclado ----------
+{
+  const { page, context } = await open({ width: 844, height: 390, state: "populated" })
+  await page.getByRole("heading", { level: 1 }).waitFor()
+  const sair = page.locator("aside").getByRole("button", { name: "Sair" })
+  await sair.scrollIntoViewIfNeeded()
+  const box = await sair.boundingBox()
+  check("paisagem 844x390: Sair alcançável na sidebar", box && box.y >= 0 && box.y + box.height <= 390, box ? `y=${Math.round(box.y)}` : "")
+  const over = await noOverflow(page)
+  check("paisagem 844x390: sem scroll horizontal", over.doc <= 0 && over.main <= 0)
+  await context.close()
+}
+{
+  // Zoom de 200% em 1440px equivale a uma janela de 720px.
+  const { page, context } = await open({ width: 720, height: 450, state: "populated" })
+  await page.getByRole("heading", { level: 1 }).waitFor()
+  const over = await noOverflow(page)
+  check("zoom 200%: sem scroll horizontal", over.doc <= 0 && over.main <= 0)
+  await context.close()
+}
+{
+  const { page, context } = await open({ width: 1440, state: "populated" })
+  await page.getByText("Barbearia Fictícia Centro").waitFor()
+  await page.keyboard.press("Tab")
+  await page.keyboard.press("Tab")
+  await page.keyboard.press("Tab")
+  const focused = await page.evaluate(() => {
+    const el = document.activeElement
+    return { href: el.getAttribute("href"), outline: getComputedStyle(el).outlineStyle }
+  })
+  check("teclado: foco visível na navegação", focused.href === "/agendamentos" && focused.outline !== "none", JSON.stringify(focused))
+  await page.keyboard.press("Enter")
+  await page.waitForURL(BASE + "/agendamentos")
+  check("teclado: Enter navega", true)
+  await context.close()
+}
+
+await browser.close()
+const failed = results.filter((r) => !r).length
+console.log(`\nRESULTADO: ${results.length - failed}/${results.length} verificações aprovadas, ${failed} falhas`)
+process.exit(failed ? 1 : 0)
