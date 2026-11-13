@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react"
-import { Link, useLocation, useParams } from "react-router-dom"
+import { Link, useLocation, useNavigate, useParams } from "react-router-dom"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Check } from "lucide-react"
 import { PublicHeader } from "@/app/PublicHeader"
 import { AuthDialog } from "@/features/auth/components/AuthDialog"
-import type { AuthView } from "@/features/auth/domain"
+import { CALLBACK_NOTICES, toAuthView, type AuthView, type CallbackError } from "@/features/auth/domain"
 import { useAuth } from "@/features/auth/hooks/useAuth"
 import { formatDuration, formatPrice } from "@/features/catalog/domain"
 import { Button } from "@/ui/button"
@@ -19,27 +19,44 @@ import { DEFAULT_TEMPLATE, SiteRenderer, isTemplateId } from "@/features/site/te
 import { paletteStyle } from "@/features/site/templates/palette"
 import { buildSiteView } from "@/features/site/templates/view"
 import { PhoneInput } from "@/ui/phone-input"
-import { phoneDigits } from "@/lib/br"
+import { formatPhone, phoneDigits } from "@/lib/br"
 import { ServiceDetailDialog } from "../components/ServiceDetailDialog"
 import { BookingDialog, ProfessionalChoice } from "../components/BookingDialog"
 import { servicePhotos } from "@/features/catalog/domain"
-import { createBooking, getPublicShop } from "../api"
+import { createBooking, fetchMyBookings, getPublicShop } from "../api"
 import { SlotPicker } from "../components/SlotPicker"
 import { bookingErrorMessage, formatDateTime, isMissingSchema, validateContact, type Slot } from "../domain"
-import { isShopSection, shopBookingsPath, shopPath } from "@/lib/shopPaths"
+import { isShopSection, shopAuthPath, shopBookingsPath, shopPath } from "@/lib/shopPaths"
 
 const DRAFT_KEY = "barberia:booking-draft"
+const DRAFT_TTL_MS = 30 * 60 * 1000
 
-type Draft = { slug: string; serviceId: string | null; professionalId: string; nome: string; whatsapp: string }
+type Draft = {
+  slug: string; serviceId: string | null; professionalId: string; slot: Slot | null
+  nome: string; whatsapp: string; lembretes: boolean; marketing: boolean; exp: number
+}
 
+/**
+ * Rascunho da reserva guardado antes do login. Fica no localStorage porque o Google e a confirmação do e-mail
+ * (aberta em outra aba) saem da página; vence em 30 min, porque o horário pode ser ocupado.
+ */
 function readDraft(slug: string): Draft | null {
   try {
-    const draft = JSON.parse(sessionStorage.getItem(DRAFT_KEY) ?? "null") as Draft | null
-    return draft?.slug === slug ? draft : null
+    const draft = JSON.parse(localStorage.getItem(DRAFT_KEY) ?? "null") as Draft | null
+    return draft?.slug === slug && typeof draft.exp === "number" && draft.exp > Date.now() ? draft : null
   } catch {
     return null
   }
 }
+function saveDraft(draft: Omit<Draft, "exp">) {
+  try { localStorage.setItem(DRAFT_KEY, JSON.stringify({ ...draft, exp: Date.now() + DRAFT_TTL_MS })) } catch { /* sem armazenamento */ }
+}
+function clearDraft() {
+  try { localStorage.removeItem(DRAFT_KEY) } catch { /* sem armazenamento */ }
+}
+/** Dia (AAAA-MM-DD) do horário no fuso da barbearia, para o calendário reabrir no dia escolhido. */
+const dayOf = (iso: string, tz: string) =>
+  new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(iso))
 
 function Step({ number, title, children }: { number: number; title: string; children: React.ReactNode }) {
   return (
@@ -60,18 +77,72 @@ export function PublicShop() {
   const { session, loading } = useAuth()
   const draft = useRef(readDraft(slug)).current
 
-  const [serviceId, setServiceId] = useState<string | null>(draft?.serviceId ?? null)
-  const [professionalId, setProfessionalId] = useState(draft?.professionalId ?? "any")
+  const [serviceId, setServiceId] = useState<string | null>(null)
+  const [professionalId, setProfessionalId] = useState("any")
   const [slot, setSlot] = useState<Slot | null>(null)
-  const [nome, setNome] = useState(draft?.nome ?? String(session?.user.user_metadata?.full_name ?? ""))
-  const [whatsapp, setWhatsapp] = useState(draft?.whatsapp ?? "")
+  const [nome, setNome] = useState(String(session?.user.user_metadata?.full_name ?? ""))
+  const [whatsapp, setWhatsapp] = useState("")
   const [lembretes, setLembretes] = useState(false)
   const [marketing, setMarketing] = useState(false)
   const [errors, setErrors] = useState<Record<string, string>>({})
-  const [authView, setAuthView] = useState<AuthView | null>(null)
-  // ao voltar do login com um rascunho salvo, o pop-up da reserva reabre sozinho
-  const [bookingOpen, setBookingOpen] = useState(Boolean(draft))
+  // Porta do cliente: /slug/entrar, /slug/criar-conta e /slug/recuperar abrem o acesso por cima da página da barbearia.
+  const navigate = useNavigate()
+  const authView = toAuthView(location.pathname.split("/")[2] ?? null)
+  const fromState = (location.state as { from?: unknown } | null)?.from
+  const from = typeof fromState === "string" && fromState.startsWith(shopPath(slug)) && !toAuthView(fromState.split("/")[2] ?? null) ? fromState : null
+  const openAuth = (target: AuthView) =>
+    navigate(shopAuthPath(slug, target), authView ? { replace: true, state: location.state } : { state: { from: location.pathname } })
+  const closeAuth = () => navigate(from ?? shopPath(slug), { replace: true })
+  const [bookingOpen, setBookingOpen] = useState(false)
   const key = useRef(crypto.randomUUID())
+  const draftChecked = useRef(false)
+  const awaitingLogin = useRef(false)
+
+  // Volta do Google ou da confirmação do e-mail: com a conta aberta, a reserva reabre com serviço, dia, horário e dados.
+  // Sem conta aberta o rascunho não é aplicado: em aparelho compartilhado, a próxima pessoa não vê nome e WhatsApp alheios.
+  useEffect(() => {
+    if (loading || draftChecked.current) return
+    draftChecked.current = true
+    if (!draft || !session) return
+    setServiceId(draft.serviceId)
+    setProfessionalId(draft.professionalId)
+    setSlot(draft.slot)
+    setNome(draft.nome)
+    setWhatsapp(draft.whatsapp)
+    setLembretes(draft.lembretes)
+    setMarketing(draft.marketing)
+    setBookingOpen(true)
+    clearDraft()
+  }, [loading, session, draft])
+
+  // Entrou pelo pop-up nesta mesma página: a reserva reabre como estava.
+  useEffect(() => {
+    if (!session || !awaitingLogin.current) return
+    awaitingLogin.current = false
+    setBookingOpen(true)
+  }, [session])
+
+  // Entrou pela porta do cliente: volta para onde estava ou, sem origem, para as reservas desta barbearia.
+  useEffect(() => {
+    if (session && authView) navigate(from ?? shopBookingsPath(slug), { replace: true })
+  }, [session, authView, from, slug, navigate])
+
+  // Cliente com conta: nome e WhatsApp já vêm preenchidos (da última reserva; o nome, também da conta) e podem ser
+  // editados. Só preenche campo vazio: nunca troca o que a pessoa digitou ou o que voltou do rascunho.
+  const mine = useQuery({ queryKey: ["my-bookings"], queryFn: fetchMyBookings, enabled: Boolean(session) })
+  const prefilled = useRef(false)
+  const [phoneVersion, setPhoneVersion] = useState(0) // o campo de telefone só lê o valor inicial: muda a chave para mostrar o preenchido
+  useEffect(() => {
+    if (!session || !mine.isFetched || prefilled.current) return
+    prefilled.current = true
+    const last = mine.data?.[0]
+    setNome((v) => v || last?.cliente_nome || String(session.user.user_metadata?.full_name ?? ""))
+    const phone = last?.cliente_whatsapp || String(session.user.user_metadata?.whatsapp ?? "") // última reserva ou o do cadastro
+    if (phone) {
+      setWhatsapp((v) => v || formatPhone(phone))
+      setPhoneVersion((n) => n + 1)
+    }
+  }, [session, mine.isFetched, mine.data])
 
   const shop = useQuery({ queryKey: ["public-shop", slug], queryFn: () => getPublicShop(slug) })
   const data = shop.data
@@ -101,7 +172,7 @@ export function PublicShop() {
         inicio: slot!.slot_inicio, nome: nome.trim(), whatsapp: phoneDigits(whatsapp), lembretes, marketing, key: key.current,
       }),
     onSuccess: async () => {
-      sessionStorage.removeItem(DRAFT_KEY)
+      clearDraft()
       await queryClient.invalidateQueries({ queryKey: ["my-bookings"] })
     },
     onError: (error) => {
@@ -117,9 +188,10 @@ export function PublicShop() {
     setErrors(found)
     if (Object.keys(found).length > 0 || !slot) return
     if (!session) {
-      sessionStorage.setItem(DRAFT_KEY, JSON.stringify({ slug, serviceId, professionalId, nome, whatsapp } satisfies Draft))
-      setBookingOpen(false) // um pop-up por vez: o login abre sozinho; ao voltar, a reserva reabre com os dados
-      setAuthView("entrar")
+      saveDraft({ slug, serviceId, professionalId, slot, nome, whatsapp, lembretes, marketing })
+      awaitingLogin.current = true
+      setBookingOpen(false) // um pop-up por vez: o login abre sozinho; ao entrar, a reserva reabre com os dados
+      openAuth("entrar")
       return
     }
     book.mutate()
@@ -132,7 +204,7 @@ export function PublicShop() {
 
   return (
     <div className="min-h-dvh bg-background text-foreground" style={showSite ? paletteStyle(templateId) : undefined}>
-      <PublicHeader onLogin={() => setAuthView("entrar")} shopName={data?.nome} slug={slug} />
+      <PublicHeader onLogin={() => openAuth("entrar")} shopName={data?.nome} slug={slug} logoUrl={view?.logoUrl} />
       {showSite && data && view ? (
         <main>
           {/* O modelo escolhido pela barbearia só APRESENTA os dados; a reserva abaixo é a mesma para os cinco modelos. */}
@@ -174,6 +246,7 @@ export function PublicShop() {
                       shopId={data.id} tz={data.fuso} serviceId={service.id}
                       professionalId={professionalId === "any" ? null : professionalId}
                       selected={slot?.slot_inicio ?? null}
+                      initialDate={slot ? dayOf(slot.slot_inicio, data.fuso) : undefined}
                       onSelect={(next) => { setSlot(next); key.current = crypto.randomUUID() }}
                     />
                   </Step>
@@ -189,7 +262,7 @@ export function PublicShop() {
                       <Input id="b-nome" value={nome} autoComplete="name" aria-invalid={errors.nome ? true : undefined} aria-describedby={errors.nome ? "b-nome-erro" : undefined} className="h-11 text-base md:h-10 md:text-sm" onChange={(e) => setNome(e.target.value)} />
                     </Field>
                     <Field label="WhatsApp" htmlFor="b-whats" error={errors.whatsapp} errorId="b-whats-erro">
-                      <PhoneInput id="b-whats" defaultValue={whatsapp} onValueChange={setWhatsapp} aria-invalid={errors.whatsapp ? true : undefined} aria-describedby={errors.whatsapp ? "b-whats-erro" : undefined} />
+                      <PhoneInput key={phoneVersion} id="b-whats" defaultValue={whatsapp} onValueChange={setWhatsapp} aria-invalid={errors.whatsapp ? true : undefined} aria-describedby={errors.whatsapp ? "b-whats-erro" : undefined} />
                     </Field>
                     <label className="flex min-h-11 items-center gap-3 text-sm">
                       <input type="checkbox" checked={lembretes} onChange={(e) => setLembretes(e.target.checked)} className="h-5 w-5 shrink-0 accent-primary" />
@@ -245,10 +318,13 @@ export function PublicShop() {
       <AuthDialog
         open={Boolean(authView) && !loading && !session}
         view={authView}
-        next={location.pathname + location.search}
-        notice={null}
-        onViewChange={setAuthView}
-        onClose={() => setAuthView(null)}
+        next={from ?? shopBookingsPath(slug)}
+        notice={CALLBACK_NOTICES[new URLSearchParams(location.search).get("erro") as CallbackError] ?? null}
+        onViewChange={openAuth}
+        onClose={closeAuth}
+        client
+        shopName={data?.nome}
+        shopLogo={view?.logoUrl}
       />
     </div>
   )

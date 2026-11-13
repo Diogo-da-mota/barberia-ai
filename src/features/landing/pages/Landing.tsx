@@ -1,9 +1,10 @@
 import { useEffect, useState, type ReactNode } from "react"
-import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom"
+import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom"
 import { Menu, Scissors } from "lucide-react"
 import { AuthDialog } from "@/features/auth/components/AuthDialog"
 import {
   CALLBACK_NOTICES,
+  panelAuthPath,
   safeNext,
   SESSION_REJECTED_NOTICE,
   toAuthView,
@@ -170,12 +171,14 @@ function Card({ title, text, demo, number }: { title: string; text: string; demo
 
 export function Landing() {
   const { session, loading } = useAuth()
-  const [searchParams, setSearchParams] = useSearchParams()
+  const [searchParams] = useSearchParams()
   const location = useLocation()
   const navigate = useNavigate()
   const hasSession = Boolean(session)
 
-  const view = toAuthView(searchParams.get("auth"))
+  // Porta do sistema: /painel/entrar, /painel/criar-conta, /painel/recuperar
+  const view = toAuthView(useParams().view ?? null)
+  const legacyView = toAuthView(searchParams.get("auth")) // link antigo /?auth=…
   const redirect = location.state as AuthRedirectState
   const sessionRejected = Boolean(redirect?.sessionRejected)
   const next = safeNext(redirect?.from)
@@ -185,15 +188,20 @@ export function Landing() {
 
   // Login concluído: a sessão chega por aqui em todos os métodos de login. Uma sessão
   // recusada pelo servidor não redireciona, o que evita ciclo com o AuthGuard.
+  // Conta só de cliente é recusada no painel (PanelGate em routes.tsx), que encerra só a sessão do painel.
   useEffect(() => {
     if (!loading && session && view && !sessionRejected) navigate(next, { replace: true })
   }, [loading, session, view, sessionRejected, next, navigate])
 
-  const openAuth = (target: AuthView) => setSearchParams({ auth: target })
-  const changeView = (target: AuthView) =>
-    setSearchParams({ auth: target }, { replace: true, state: location.state })
-  const closeAuth = () => setSearchParams({}, { replace: true })
+  const openAuth = (target: AuthView) => navigate(panelAuthPath(target))
+  const changeView = (target: AuthView) => navigate(panelAuthPath(target), { replace: true, state: location.state })
+  const closeAuth = () => navigate("/", { replace: true })
   const access = { onOpenAuth: openAuth, hasSession }
+
+  if (legacyView) {
+    const erro = searchParams.get("erro")
+    return <Navigate to={`${panelAuthPath(legacyView)}${erro ? `?erro=${encodeURIComponent(erro)}` : ""}`} replace state={location.state} />
+  }
 
   return (
     <div id="top" className="min-h-svh bg-background text-foreground">

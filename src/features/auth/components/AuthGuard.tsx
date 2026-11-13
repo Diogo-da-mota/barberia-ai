@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react"
 import { Navigate, useLocation } from "react-router-dom"
 import { useAuth } from "@/features/auth/hooks/useAuth"
 import { getCurrentUser, signOut } from "@/features/auth/services/auth"
+import { panelAuthPath } from "@/features/auth/domain"
 import { Skeleton } from "@/ui/skeleton"
 
 /** Só 401/403 ou sessão ausente invalidam a sessão. Falha de rede não expulsa o usuário. */
@@ -51,7 +52,7 @@ export function AuthGuard({ children, loginPath }: { children: React.ReactNode; 
   if (!loading && (!session || currentCheck?.accepted === false)) {
     return (
       <Navigate
-        to={loginPath ? loginPath() : "/?auth=entrar"}
+        to={loginPath ? loginPath() : panelAuthPath()}
         replace
         state={{
           from: location.pathname + location.search,

@@ -10,7 +10,7 @@ import { toast } from "@/ui/sonner"
  * Com `shopName`/`slug` é o cabeçalho DA BARBEARIA: a marca é dela e o botão "Acesso" é a porta do cliente final.
  * Não há link para o painel aqui: a equipe entra pela landing (/) → /dashboard. A proteção de verdade está em AuthGuard, StaffRoute e no RLS.
  */
-export function PublicHeader({ onLogin, shopName, slug }: { onLogin?: () => void; shopName?: string; slug?: string }) {
+export function PublicHeader({ onLogin, shopName, slug, logoUrl }: { onLogin?: () => void; shopName?: string; slug?: string; logoUrl?: string | null }) {
   const { session, loading, logout } = useAuth()
   const navigate = useNavigate()
   const home = slug ? shopPath(slug) : "/"
@@ -29,9 +29,13 @@ export function PublicHeader({ onLogin, shopName, slug }: { onLogin?: () => void
     <header className="border-b border-border bg-card">
       <div className="mx-auto flex h-16 w-[min(100%-2rem,1120px)] items-center justify-between gap-3">
         <Link to={home} aria-label={`${shopName ?? "Barberia AI"}, ir para o início`} className="flex min-h-11 min-w-0 items-center gap-2 rounded-md">
-          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-primary text-primary-foreground">
-            <Scissors className="h-4 w-4" aria-hidden="true" />
-          </span>
+          {logoUrl ? (
+            <img src={logoUrl} alt="" className="h-8 w-8 shrink-0 rounded-md object-cover" />
+          ) : (
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-primary text-primary-foreground">
+              <Scissors className="h-4 w-4" aria-hidden="true" />
+            </span>
+          )}
           <span className="truncate font-display text-lg font-bold tracking-wide">{shopName ?? "Barberia AI"}</span>
         </Link>
 

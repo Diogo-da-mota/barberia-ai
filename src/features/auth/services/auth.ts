@@ -1,12 +1,20 @@
-import { supabase } from "@/lib/supabase"
+import { authClients, CALLBACK_PATH, currentArea, supabase } from "@/lib/supabase"
+import type { AuthArea } from "@/lib/shopPaths"
 import type { Session, User } from "@supabase/supabase-js"
-import { rememberNext } from "../domain"
+import { rememberNext, safeNext } from "../domain"
 
-/** Usa a origem atual, para funcionar em qualquer porta ou domínio cadastrado no Supabase. */
-function callbackUrl() {
-  return `${window.location.origin}/auth/callback`
+/**
+ * Usa a origem atual (qualquer porta ou domínio cadastrado no Supabase). `area` diz ao /auth/callback qual sessão o fluxo
+ * atualiza; `volta` é a porta de origem (barbearia ou painel), para o link do e-mail aberto em outro aparelho voltar a ela.
+ * Os modelos de e-mail (supabase/email-templates) acrescentam `#token_hash=…&type=…` a este endereço (`{{ .RedirectTo }}`):
+ * depois do `#`, o token não chega a servidor nem a log.
+ */
+function callbackUrl(tipo?: "cadastro" | "recuperar", next?: string) {
+  const volta = next ? `&volta=${encodeURIComponent(safeNext(next))}` : ""
+  return `${window.location.origin}${CALLBACK_PATH}?area=${currentArea()}${tipo ? `&tipo=${tipo}` : ""}${volta}`
 }
 
+/** O fluxo começa no cliente da área aberta (porta do painel ou da barbearia): o verificador PKCE fica só nele. */
 export async function signInWithGoogle(next = "/dashboard") {
   rememberNext(next)
   const { error } = await supabase.auth.signInWithOAuth({
@@ -28,45 +36,55 @@ export async function signInWithPassword(email: string, password: string) {
 }
 
 /** `full_name` é só para exibição: papéis e permissões nunca vêm de `user_metadata`. */
-export async function signUp(account: { nome: string; email: string; senha: string }, next = "/dashboard") {
+export async function signUp(account: { nome: string; email: string; senha: string; whatsapp?: string }, next = "/dashboard") {
   rememberNext(next)
   const { data, error } = await supabase.auth.signUp({
     email: account.email,
     password: account.senha,
     options: {
-      emailRedirectTo: callbackUrl(),
-      data: { full_name: account.nome },
+      emailRedirectTo: callbackUrl("cadastro", next),
+      // signup_next: destino ao confirmar o e-mail em outro aparelho (só navegação, validada por safeNext)
+      // whatsapp: o banco copia para profiles.whatsapp ao criar a conta (só dígitos válidos)
+      data: { full_name: account.nome, signup_next: safeNext(next), ...(account.whatsapp ? { whatsapp: account.whatsapp } : {}) },
     },
   })
   if (error) {
     throw error
   }
+  // E-mail já cadastrado: com a confirmação de e-mail ligada o Supabase não devolve erro, e sim um usuário sem identidades
+  // (e não envia e-mail). A tela orienta a entrar ou recuperar a senha em vez de esperar uma confirmação que não vem.
+  if (data.user && Array.isArray(data.user.identities) && data.user.identities.length === 0) {
+    return { needsEmailConfirmation: false, alreadyRegistered: true }
+  }
   return { needsEmailConfirmation: !data.session }
 }
 
-export async function requestPasswordReset(email: string) {
-  const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: callbackUrl() })
+/** `next`: para onde voltar depois de salvar a nova senha (cliente → barbearia; equipe → painel), em qualquer navegador. */
+export async function requestPasswordReset(email: string, next = "/dashboard") {
+  rememberNext(next)
+  const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: callbackUrl("recuperar", next) })
   if (error) {
     throw error
   }
 }
 
-export async function updatePassword(password: string) {
-  const { error } = await supabase.auth.updateUser({ password })
+export async function updatePassword(password: string, area: AuthArea = currentArea()) {
+  const { error } = await authClients[area].auth.updateUser({ password })
   if (error) {
     throw error
   }
 }
 
-export async function signOut(scope: "global" | "local" = "global") {
-  const { error } = await supabase.auth.signOut({ scope })
+/** `local`: encerra só a sessão desta área neste navegador; a outra área (mesmo que seja a mesma pessoa) continua logada. */
+export async function signOut(scope: "global" | "local" = "local", area: AuthArea = currentArea()) {
+  const { error } = await authClients[area].auth.signOut({ scope })
   if (error) {
     throw error
   }
 }
 
-export async function getSession() {
-  const { data, error } = await supabase.auth.getSession()
+export async function getSession(area: AuthArea = currentArea()) {
+  const { data, error } = await authClients[area].auth.getSession()
   if (error) {
     throw error
   }
@@ -80,12 +98,56 @@ export type AuthStateChange = {
 }
 
 export function onAuthStateChange(
-  callback: (state: AuthStateChange) => void
+  callback: (state: AuthStateChange) => void,
+  area: AuthArea = currentArea()
 ) {
-  const { data } = supabase.auth.onAuthStateChange((event, session) => {
+  const { data } = authClients[area].auth.onAuthStateChange((event, session) => {
     callback({ event, session, user: session?.user ?? null })
   })
   return data
+}
+
+const finishing = new Map<string, Promise<{ recovery: boolean }>>()
+
+type CallbackInput = {
+  code: string | null
+  tokenHash?: string | null
+  isRecovery?: boolean
+  tokens: { access_token: string; refresh_token: string } | null
+}
+
+/**
+ * Conclui o retorno do Google ou do e-mail SÓ no cliente da área que iniciou o fluxo, uma vez por link (o StrictMode e um
+ * segundo render não concluem duas vezes). `tokenHash`: link do e-mail (cadastro e nova senha), vale em qualquer navegador
+ * ou aparelho; o servidor aceita cada link uma única vez e só até expirar. `code`: Google (PKCE, o verificador está só no
+ * cliente desta área, no navegador que iniciou) e e-mails antigos. `tokens`: links antigos do fluxo implícito.
+ */
+export function finishAuthCallback(area: AuthArea, input: CallbackInput) {
+  const key = `${area}:${input.tokenHash ?? input.code ?? input.tokens?.access_token ?? ""}`
+  let pending = finishing.get(key)
+  if (!pending) {
+    pending = (async () => {
+      const auth = authClients[area].auth
+      if (input.tokenHash) {
+        const type = input.isRecovery ? "recovery" : "email"
+        const { error } = await auth.verifyOtp({ token_hash: input.tokenHash, type })
+        if (error) throw error
+        return { recovery: type === "recovery" }
+      }
+      if (input.code) {
+        const { data, error } = await auth.exchangeCodeForSession(input.code)
+        if (error) throw error
+        // a SDK devolve `redirectType` ("recovery" no link de nova senha), ainda fora do tipo publicado
+        return { recovery: (data as { redirectType?: string | null }).redirectType === "recovery" }
+      }
+      if (!input.tokens) throw new Error("Retorno sem código")
+      const { error } = await auth.setSession(input.tokens)
+      if (error) throw error
+      return { recovery: false }
+    })()
+    finishing.set(key, pending)
+  }
+  return pending
 }
 
 export async function getCurrentUser() {

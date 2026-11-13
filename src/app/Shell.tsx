@@ -28,6 +28,7 @@ import { Button } from "@/ui/button"
 import { Sheet, SheetContent, SheetTitle } from "@/ui/sheet"
 import { toast } from "@/ui/sonner"
 import { shopPath } from "@/lib/shopPaths"
+import { clientAccessPath } from "@/features/auth/lastShop"
 
 const DESTINATIONS = [
   { href: "/dashboard", label: "Início", shortLabel: "Início", icon: Home },
@@ -79,14 +80,17 @@ function Brand({ collapsible = false }: { collapsible?: boolean }) {
 
 export function Shell({ children, hero }: ShellProps) {
   const { theme, toggleTheme } = useTheme()
-  const { logout, session } = useAuth()
+  const { logout, session, area } = useAuth()
   const navigate = useNavigate()
   const gate = useActiveBarbershop()
   const [menuOpen, setMenuOpen] = useState(false)
 
   // Menu da sidebar por papel. A barra inferior do celular mantém os 5 destinos do Design System.
   const shop = gate.state === "ready" ? gate.active : null
-  const sidebar: Destination[] = shop
+  // Na área do cliente (/minhas-reservas) o Shell só mostra as reservas: o painel tem sessão própria (porta do sistema).
+  const sidebar: Destination[] = area === "cliente"
+    ? [ALL.reservas]
+    : shop
     ? [
         ALL.inicio, ALL.agenda, ALL.clientes, ALL.servicos, ALL.equipe,
         ALL.financeiro,
@@ -97,7 +101,7 @@ export function Shell({ children, hero }: ShellProps) {
 
   const handleLogout = async () => {
     // Sai da área protegida antes de encerrar a sessão, para o AuthGuard não abrir o popup de login.
-    navigate("/", { replace: true })
+    navigate(area === "cliente" ? clientAccessPath() : "/", { replace: true })
     try {
       await logout()
     } catch {
@@ -272,8 +276,8 @@ export function Shell({ children, hero }: ShellProps) {
         </SheetContent>
       </Sheet>
 
-      {/* Barra inferior: até 767px (Design System, seção 12) */}
-      <nav
+      {/* Barra inferior: até 767px (Design System, seção 12); só no painel */}
+      {area === "painel" && <nav
         aria-label="Navegação principal"
         className="fixed right-0 bottom-0 left-0 z-50 grid grid-cols-5 border-t border-border bg-card pb-[env(safe-area-inset-bottom)] md:hidden"
       >
@@ -299,7 +303,7 @@ export function Shell({ children, hero }: ShellProps) {
             )}
           </NavLink>
         ))}
-      </nav>
+      </nav>}
     </div>
   )
 }

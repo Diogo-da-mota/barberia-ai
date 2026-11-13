@@ -7,6 +7,8 @@ export type ActiveBarbershop = {
   state: "loading" | "error" | "unavailable" | "none" | "ready"
   active: MyBarbershop | null
   canManage: boolean
+  /** Só tem vínculo de cliente: não vê convites para criar barbearia nem telas de gestão. */
+  clientOnly?: boolean
   retry: () => void
   isRetrying: boolean
 }
@@ -35,6 +37,6 @@ export function useActiveBarbershop(): ActiveBarbershop {
 
   const staff = result.barbershops.filter((shop) => shop.papel !== "cliente")
   const active = staff[0] ?? null
-  if (!active) return { ...base, state: "none", active: null, canManage: false }
+  if (!active) return { ...base, state: "none", active: null, canManage: false, clientOnly: result.barbershops.length > 0 }
   return { ...base, state: "ready", active, canManage: active.papel === "proprietario" || active.papel === "gerente" }
 }

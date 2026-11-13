@@ -9,7 +9,8 @@ import { SlotPicker } from "../components/SlotPicker"
 import { bookingErrorMessage, formatDateTime, isActive, type BookingRow, type Slot } from "../domain"
 
 /**
- * Reservas do cliente autenticado (só as dele: a regra está no banco), separadas em próximas e histórico, com cancelar e reagendar.
+ * Reservas do cliente autenticado (só as que ele fez: `fetchMyBookings` filtra pela conta; a equipe não vê as da barbearia aqui),
+ * separadas em próximas e histórico, com cancelar e reagendar.
  * É a ÚNICA lógica de reservas do cliente: o painel (/minhas-reservas) e a área da barbearia (/:slug/minhas-reservas) só mudam a apresentação.
  * `dialogs` traz os pop-ups de confirmação e de reagendamento; quem usa o hook precisa renderizá-lo.
  */

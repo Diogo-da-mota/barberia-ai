@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from "react"
 import { formatPhone } from "@/lib/br"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { ChevronLeft, ChevronRight, Lock } from "lucide-react"
+import { CalendarPlus, ChevronLeft, ChevronRight, Lock } from "lucide-react"
 import { fetchProfessionals } from "@/features/catalog/api"
 import { CatalogFrame, ShopGate } from "@/features/catalog/components/CatalogFrame"
 import { ConfirmDelete } from "@/features/catalog/components/ConfirmDelete"
@@ -15,6 +15,7 @@ import { DateTimeField } from "@/ui/date-time"
 import { Input } from "@/ui/input"
 import { Skeleton } from "@/ui/skeleton"
 import { toast } from "@/ui/sonner"
+import { ManualBookingDialog } from "../components/ManualBookingDialog"
 import { ReservationCard } from "../components/ReservationCard"
 import { cancelBooking, createBlock, deleteBlock, fetchBlocks, fetchShopBookings, setBookingStatus } from "../api"
 import {
@@ -57,6 +58,7 @@ function DayAgenda({ shopId, tz, readOnly }: { shopId: string; tz: string; readO
   const [view, setView] = useState<View>("dia")
   const [canceling, setCanceling] = useState<BookingRow | null>(null)
   const [blocking, setBlocking] = useState(false)
+  const [scheduling, setScheduling] = useState(false)
 
   const bookings = useQuery({ queryKey: ["shop-bookings", shopId], queryFn: () => fetchShopBookings(shopId) })
   const blocks = useQuery({ queryKey: ["blocks", shopId], queryFn: () => fetchBlocks(shopId) })
@@ -165,7 +167,8 @@ function DayAgenda({ shopId, tz, readOnly }: { shopId: string; tz: string; readO
         <Button variant="outline" size="icon" className="h-11 w-11 md:h-10 md:w-10" aria-label={`Anterior (${unit})`} onClick={() => step(-1)}><ChevronLeft className="h-4 w-4" aria-hidden="true" /></Button>
         <Button variant="outline" className="h-11 md:h-10" onClick={() => setDate(todayIn(tz))}>Hoje</Button>
         <Button variant="outline" size="icon" className="h-11 w-11 md:h-10 md:w-10" aria-label={`Próximo (${unit})`} onClick={() => step(1)}><ChevronRight className="h-4 w-4" aria-hidden="true" /></Button>
-        {!readOnly && <Button variant="outline" className="ml-auto h-11 gap-1 md:h-10" onClick={() => setBlocking(true)}><Lock className="h-4 w-4" aria-hidden="true" />Bloquear horário</Button>}
+        {!readOnly && <Button className="ml-auto h-11 gap-1 md:h-10" onClick={() => setScheduling(true)}><CalendarPlus className="h-4 w-4" aria-hidden="true" />Novo agendamento</Button>}
+        {!readOnly && <Button variant="outline" className="h-11 gap-1 md:h-10" onClick={() => setBlocking(true)}><Lock className="h-4 w-4" aria-hidden="true" />Bloquear horário</Button>}
         <h2 className="order-last w-full font-display text-xl font-semibold tracking-wide" aria-live="polite">{title}</h2>
       </div>
 
@@ -212,6 +215,7 @@ function DayAgenda({ shopId, tz, readOnly }: { shopId: string; tz: string; readO
         pending={cancel.isPending} onConfirm={() => canceling && cancel.mutate(canceling)} onClose={() => setCanceling(null)}
       />
       {!readOnly && <BlockDialog open={blocking} shopId={shopId} tz={tz} date={date} professionals={professionals} onClose={() => setBlocking(false)} onDone={refresh} />}
+      {!readOnly && <ManualBookingDialog open={scheduling} shopId={shopId} tz={tz} date={date} professionals={professionals} onClose={() => setScheduling(false)} onDone={refresh} />}
     </>
   )
 }

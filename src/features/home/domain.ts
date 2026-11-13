@@ -24,6 +24,11 @@ export function isCustomerOnly(barbershops: MyBarbershop[]): boolean {
   return barbershops.length > 0 && barbershops.every((shop) => shop.papel === "cliente")
 }
 
+/** Tem papel de equipe (proprietário, gerente ou barbeiro) em alguma barbearia. Só decide a tela; quem protege os dados é o RLS. */
+export function isStaff(barbershops: MyBarbershop[]): boolean {
+  return barbershops.some((shop) => shop.papel !== "cliente")
+}
+
 /** Usado só para exibição: `user_metadata` é editável e nunca define permissões. */
 export function firstName(metadata: Record<string, unknown> | undefined): string | null {
   const name = metadata?.full_name ?? metadata?.name

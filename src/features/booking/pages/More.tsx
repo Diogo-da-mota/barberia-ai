@@ -53,7 +53,7 @@ export function More() {
   if (!manager || !shop) {
     return (
       <CatalogFrame full title="Mais" description={DESCRIPTION} header={<TabbedHeader photo={false} name="mais" icon={Settings} title="Mais" description="Dados e preferências da sua conta." />}>
-        {gate.state === "none" && (
+        {gate.state === "none" && !gate.clientOnly && (
           <Panel>
             <EmptyState title="Você ainda não tem barbearia" description="Crie a sua para cadastrar serviços, equipe e receber reservas." action={<Button asChild className="h-11 md:h-10"><Link to="/dashboard/barbearias/nova">Criar barbearia</Link></Button>} />
           </Panel>

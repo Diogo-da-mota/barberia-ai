@@ -25,7 +25,8 @@ export type BookingRow = {
   id: string
   barbershop_id: string
   professional_id: string
-  customer_id: string
+  /** Nulo na reserva feita pela barbearia para cliente sem conta (0022). */
+  customer_id: string | null
   service_id: string | null
   servico_nome: string
   preco_centavos: number
@@ -161,6 +162,7 @@ const MESSAGES: Record<string, string> = {
   booking_rate_limited: "Você fez muitas reservas nas últimas 24 horas. Tente novamente mais tarde ou fale com a barbearia.",
   cancel_window: "O prazo para cancelar ou reagendar já passou. Fale com a barbearia.",
   invalid_contact: "Confira seu nome e seu WhatsApp.",
+  invalid_professional: "Escolha o barbeiro.",
   invalid_service: "Este serviço não está disponível.",
   invalid_status: "Esta reserva não pode mais ser alterada.",
   already_linked: "Esta conta já está ligada a outro profissional.",
@@ -220,22 +222,24 @@ export function aggregateCustomers(rows: CustomerBooking[], now = new Date()): C
   const map = new Map<string, Customer>()
   const answeredAt = new Map<string, string>()
   for (const row of [...rows].sort((a, b) => b.inicio.localeCompare(a.inicio))) {
-    const current = map.get(row.customer_id) ?? {
-      id: row.customer_id, nome: row.cliente_nome, whatsapp: row.cliente_whatsapp, total: 0, confirmados: 0, concluidos: 0, cancelados: 0, faltas: 0, gasto: 0,
+    // cliente com conta agrupa pela conta; reserva da barbearia sem conta agrupa pelo WhatsApp
+    const key = row.customer_id ?? `tel:${row.cliente_whatsapp}`
+    const current = map.get(key) ?? {
+      id: key, nome: row.cliente_nome, whatsapp: row.cliente_whatsapp, total: 0, confirmados: 0, concluidos: 0, cancelados: 0, faltas: 0, gasto: 0,
       ultimo: null, proxima: null, proximaServico: null, avisos: null, novidades: null,
     }
     // a resposta aos termos vale a da reserva mais recente (pela data em que foi feita)
     if (row.consent_lembretes !== undefined) {
       const when = row.criado_em ?? row.inicio
-      if (!answeredAt.has(row.customer_id) || when > answeredAt.get(row.customer_id)!) {
-        answeredAt.set(row.customer_id, when)
+      if (!answeredAt.has(key) || when > answeredAt.get(key)!) {
+        answeredAt.set(key, when)
         current.avisos = row.consent_lembretes
         current.novidades = row.consent_marketing ?? null
       }
     }
     if (row.status === "cancelado") {
       current.cancelados += 1
-      map.set(row.customer_id, current)
+      map.set(key, current)
       continue
     }
     current.total += 1
@@ -250,7 +254,7 @@ export function aggregateCustomers(rows: CustomerBooking[], now = new Date()): C
       current.proxima = row.inicio
       current.proximaServico = row.servico_nome ?? null
     }
-    map.set(row.customer_id, current)
+    map.set(key, current)
   }
   return [...map.values()].sort((a, b) => (b.ultimo ?? "").localeCompare(a.ultimo ?? "") || a.nome.localeCompare(b.nome))
 }

@@ -1,5 +1,6 @@
 import { useId, useState, type FormEvent, type ReactNode } from "react"
 import { Eye, EyeOff } from "lucide-react"
+import { phoneDigits, validatePhone } from "@/lib/br"
 import { Button } from "@/ui/button"
 import { DialogDescription, DialogTitle } from "@/ui/dialog"
 import { Field } from "@/ui/finance"
@@ -13,6 +14,7 @@ import {
   type AuthView,
 } from "../domain"
 import { requestPasswordReset, signInWithGoogle, signInWithPassword, signUp, updatePassword } from "../services/auth"
+import type { AuthArea } from "@/lib/shopPaths"
 
 type Values = Record<string, string>
 
@@ -71,7 +73,7 @@ type AuthInputProps = {
   label: string
   name: string
   error?: string
-  type?: "text" | "email" | "password"
+  type?: "text" | "email" | "password" | "tel"
   autoComplete: string
 }
 
@@ -117,9 +119,10 @@ function FormAlert({ message }: { message: string | null | undefined }) {
   )
 }
 
-function Header({ title, children }: { title: string; children: ReactNode }) {
+function Header({ title, eyebrow, children }: { title: string; eyebrow?: string; children: ReactNode }) {
   return (
     <div className="animate-element animate-delay-100 flex flex-col gap-1.5 pr-8 text-left">
+      {eyebrow && <p className="text-xs font-semibold tracking-widest text-primary uppercase">{eyebrow}</p>}
       <DialogTitle className="font-display text-3xl font-bold tracking-wide md:text-4xl">{title}</DialogTitle>
       <DialogDescription>{children}</DialogDescription>
     </div>
@@ -129,6 +132,9 @@ function Header({ title, children }: { title: string; children: ReactNode }) {
 type ViewProps = {
   onViewChange: (view: AuthView) => void
 }
+
+/** Porta do cliente (com o nome da barbearia) × porta do sistema (painel). */
+type DoorProps = { client?: boolean; shopName?: string }
 
 function Sent({ title, children, onViewChange }: ViewProps & { title: string; children: ReactNode }) {
   return (
@@ -141,12 +147,12 @@ function Sent({ title, children, onViewChange }: ViewProps & { title: string; ch
   )
 }
 
-type LoginFormProps = ViewProps & {
+type LoginFormProps = ViewProps & DoorProps & {
   next: string
   notice?: string | null
 }
 
-export function LoginForm({ next, notice, onViewChange }: LoginFormProps) {
+export function LoginForm({ next, notice, onViewChange, client, shopName }: LoginFormProps) {
   const form = useAuthForm(
     (values) => validateLogin({ email: values.email, senha: values.senha }),
     (values) => signInWithPassword(values.email.trim(), values.senha)
@@ -154,7 +160,9 @@ export function LoginForm({ next, notice, onViewChange }: LoginFormProps) {
 
   return (
     <>
-      <Header title="Entrar">Acesse o painel da sua barbearia.</Header>
+      <Header title="Entrar" eyebrow={client ? shopName : undefined}>
+        {client ? "Entre para ver, reagendar e cancelar suas reservas." : "Acesse o painel da sua barbearia."}
+      </Header>
       <FormAlert message={form.serverError ?? notice} />
       <Button variant="outline" className={`${SUBMIT_CLASS} animate-element animate-delay-200 gap-3`} disabled={form.pending} onClick={() => void form.run(() => signInWithGoogle(next))}>
         <GoogleIcon />
@@ -183,20 +191,46 @@ export function LoginForm({ next, notice, onViewChange }: LoginFormProps) {
           Criar uma conta
         </button>
       </p>
+      {!client && <p className="text-center text-xs text-muted-foreground">É cliente de uma barbearia? Entre pela página dela para ver suas reservas.</p>}
     </>
   )
 }
 
-export function SignUpForm({ next, onViewChange }: ViewProps & { next: string }) {
+export function SignUpForm({ next, onViewChange, client, shopName }: ViewProps & DoorProps & { next: string }) {
   const [confirmEmail, setConfirmEmail] = useState<string | null>(null)
+  const [existing, setExisting] = useState<string | null>(null)
   const form = useAuthForm(
-    (values) => validateSignUp({ nome: values.nome, email: values.email, senha: values.senha, confirmacao: values.confirmacao }),
+    (values) => ({
+      ...validateSignUp({ nome: values.nome, email: values.email, senha: values.senha, confirmacao: values.confirmacao }),
+      // obrigatório: validatePhone aceita vazio (campos opcionais), então o vazio é recusado aqui
+      ...((values.whatsapp ?? "").trim() && validatePhone(values.whatsapp) ? {} : { whatsapp: "Informe o WhatsApp com DDD, como +55 11 91234-5678." }),
+    }),
     async (values) => {
       const email = values.email.trim()
-      const { needsEmailConfirmation } = await signUp({ nome: values.nome.trim(), email, senha: values.senha }, next)
-      if (needsEmailConfirmation) setConfirmEmail(email)
+      try {
+        const result = await signUp({ nome: values.nome.trim(), email, senha: values.senha, whatsapp: phoneDigits(values.whatsapp) }, next)
+        if ("alreadyRegistered" in result && result.alreadyRegistered) return setExisting(email)
+        if (result.needsEmailConfirmation) setConfirmEmail(email)
+      } catch (error) {
+        const code = (error as { code?: string } | null)?.code
+        if (code === "user_already_exists" || code === "email_exists") return setExisting(email)
+        throw error
+      }
     }
   )
+
+  // E-mail que já tem conta: não cria outra; leva a entrar ou a recuperar a senha
+  if (existing) {
+    return (
+      <>
+        <Header title="Este e-mail já tem cadastro">
+          Entre com a sua senha. Se não lembrar, recupere a senha: enviaremos um link para {existing}.
+        </Header>
+        <Button className={SUBMIT_CLASS} onClick={() => onViewChange("entrar")}>Entrar</Button>
+        <Button variant="outline" className={SUBMIT_CLASS} onClick={() => onViewChange("recuperar")}>Recuperar senha</Button>
+      </>
+    )
+  }
 
   if (confirmEmail) {
     return (
@@ -208,11 +242,14 @@ export function SignUpForm({ next, onViewChange }: ViewProps & { next: string })
 
   return (
     <>
-      <Header title="Criar conta">Crie seu acesso com email e senha.</Header>
+      <Header title="Criar conta" eyebrow={client ? shopName : undefined}>
+        {client ? "Crie sua conta para reservar e acompanhar seus horários." : "Crie o acesso ao painel da sua barbearia."}
+      </Header>
       <FormAlert message={form.serverError} />
       <form noValidate onSubmit={form.onSubmit} className="animate-element animate-delay-300 flex flex-col gap-4">
         <AuthInput label="Nome" name="nome" autoComplete="name" error={form.errors.nome} />
         <AuthInput label="Email" name="email" type="email" autoComplete="email" error={form.errors.email} />
+        <AuthInput label="WhatsApp" name="whatsapp" type="tel" autoComplete="tel" error={form.errors.whatsapp} />
         <AuthInput label="Senha" name="senha" type="password" autoComplete="new-password" error={form.errors.senha} />
         <AuthInput label="Confirmar senha" name="confirmacao" type="password" autoComplete="new-password" error={form.errors.confirmacao} />
         <Button type="submit" className={SUBMIT_CLASS} disabled={form.pending}>
@@ -224,17 +261,18 @@ export function SignUpForm({ next, onViewChange }: ViewProps & { next: string })
           Já tenho uma conta
         </button>
       </p>
+      {!client && <p className="text-center text-xs text-muted-foreground">É cliente de uma barbearia? Entre pela página dela para ver suas reservas.</p>}
     </>
   )
 }
 
-export function RecoverForm({ onViewChange }: ViewProps) {
+export function RecoverForm({ next, onViewChange }: ViewProps & { next: string }) {
   const [sentTo, setSentTo] = useState<string | null>(null)
   const form = useAuthForm(
     (values) => validateRecover({ email: values.email }),
     async (values) => {
       const email = values.email.trim()
-      await requestPasswordReset(email)
+      await requestPasswordReset(email, next)
       setSentTo(email)
     }
   )
@@ -242,7 +280,7 @@ export function RecoverForm({ onViewChange }: ViewProps) {
   if (sentTo) {
     return (
       <Sent title="Verifique seu email" onViewChange={onViewChange}>
-        Se houver uma conta para {sentTo}, enviaremos um link para definir a nova senha. Abra o link neste navegador. Se não encontrar a mensagem, veja a caixa de spam.
+        Se houver uma conta para {sentTo}, enviaremos um link para definir a nova senha. Ele só chega no mesmo e-mail usado no cadastro (com o +apelido, se houver). Abra o link neste navegador. Se não encontrar a mensagem, veja a caixa de spam.
       </Sent>
     )
   }
@@ -266,11 +304,12 @@ export function RecoverForm({ onViewChange }: ViewProps) {
   )
 }
 
-export function NewPasswordForm({ onDone }: { onDone: () => void }) {
+/** `area`: a sessão de recuperação é a da área que pediu o link (painel ou cliente). */
+export function NewPasswordForm({ onDone, area }: { onDone: () => void; area: AuthArea }) {
   const form = useAuthForm(
     (values) => validateNewPassword({ senha: values.senha, confirmacao: values.confirmacao }),
     async (values) => {
-      await updatePassword(values.senha)
+      await updatePassword(values.senha, area)
       onDone()
     }
   )

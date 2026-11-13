@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { firstName, formatToday, isCustomerOnly, type MyBarbershop } from "./domain"
+import { firstName, formatToday, isCustomerOnly, isStaff, type MyBarbershop } from "./domain"
 
 const shop = (papel: MyBarbershop["papel"]): MyBarbershop => ({
   id: papel,
@@ -8,6 +8,15 @@ const shop = (papel: MyBarbershop["papel"]): MyBarbershop => ({
   endereco: null,
   status: "ativo",
   papel,
+})
+
+describe("isStaff", () => {
+  it("só a equipe entra na gestão: conta logada sem papel de equipe (cliente ou sem barbearia) não", () => {
+    expect(isStaff([shop("cliente")])).toBe(false)
+    expect(isStaff([])).toBe(false)
+    expect(isStaff([shop("cliente"), shop("barbeiro")])).toBe(true)
+    expect(isStaff([shop("proprietario")])).toBe(true)
+  })
 })
 
 describe("isCustomerOnly", () => {

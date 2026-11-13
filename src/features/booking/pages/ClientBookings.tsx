@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import { Link, useLocation, useParams } from "react-router-dom"
+import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom"
 import { Ban, CalendarCheck, CalendarDays, ChevronRight, Clock, Plus, type LucideIcon } from "lucide-react"
 import { useQuery } from "@tanstack/react-query"
 import { ClientHeader } from "@/app/ClientHeader"
@@ -8,7 +8,7 @@ import { AuthDialog } from "@/features/auth/components/AuthDialog"
 import { AuthGuard } from "@/features/auth/components/AuthGuard"
 import { rememberShop } from "@/features/auth/lastShop"
 import { useAuth } from "@/features/auth/hooks/useAuth"
-import type { AuthView } from "@/features/auth/domain"
+import { CALLBACK_NOTICES, type AuthView, type CallbackError } from "@/features/auth/domain"
 import { useShopAccent } from "@/lib/appearance"
 import { Button } from "@/ui/button"
 import { EmptyState, Panel } from "@/ui/finance"
@@ -19,15 +19,17 @@ import { DEFAULT_TEMPLATE, isTemplateId } from "@/features/site/templates"
 import { isLightTemplate, paletteStyle } from "@/features/site/templates/palette"
 import { cn } from "@/lib/utils"
 import { useMediaQuery } from "@/lib/useMediaQuery"
-import { shopBookingsPath, shopPath } from "@/lib/shopPaths"
+import { shopAuthPath, shopBookingsPath, shopPath } from "@/lib/shopPaths"
 import { getPublicShop } from "../api"
 import { ClientReservationCard } from "../components/ClientReservationCard"
+import { CompleteWhatsApp } from "../components/CompleteWhatsApp"
 import { useReservations } from "../hooks/useReservations"
 import { isMissingSchema, type BookingRow, type PublicShopData } from "../domain"
 
 /** Porta do cliente final: pede conta (e-mail e senha ou Google) para ele ver as próprias reservas. */
-export function ClientLogin({ next, title = "Acesso do cliente" }: { next: string; title?: string }) {
-  const [view, setView] = useState<AuthView | null>(null)
+/** Com `onOpen` (página de barbearia) os botões levam à porta do cliente dela (/slug/entrar); sem ele (/acesso) o acesso abre aqui. */
+export function ClientLogin({ next, title = "Acesso do cliente", onOpen, notice = null }: { next: string; title?: string; onOpen?: (view: AuthView) => void; notice?: string | null }) {
+  const [view, setView] = useState<AuthView | null>(notice ? "entrar" : null)
   const { session, loading } = useAuth()
   return (
     <>
@@ -35,11 +37,11 @@ export function ClientLogin({ next, title = "Acesso do cliente" }: { next: strin
         <h1 className="font-display text-2xl font-bold tracking-wide">{title}</h1>
         <p className="max-w-[44ch] text-sm text-muted-foreground">Entre ou crie sua conta com e-mail e senha para ver, reagendar e cancelar suas reservas.</p>
         <div className="flex flex-wrap justify-center gap-2">
-          <Button className="h-11 md:h-10" onClick={() => setView("entrar")}>Entrar</Button>
-          <Button variant="outline" className="h-11 md:h-10" onClick={() => setView("criar-conta")}>Criar conta</Button>
+          <Button className="h-11 md:h-10" onClick={() => (onOpen ?? setView)("entrar")}>Entrar</Button>
+          <Button variant="outline" className="h-11 md:h-10" onClick={() => (onOpen ?? setView)("criar-conta")}>Criar conta</Button>
         </div>
       </Panel>
-      <AuthDialog open={Boolean(view) && !loading && !session} view={view} next={next} notice={null} onViewChange={setView} onClose={() => setView(null)} />
+      {!onOpen && <AuthDialog open={Boolean(view) && !loading && !session} view={view} next={next} notice={notice} onViewChange={setView} onClose={() => setView(null)} client />}
     </>
   )
 }
@@ -95,14 +97,15 @@ export function ClientBookings() {
   const location = useLocation()
   const shop = useQuery({ queryKey: ["public-shop", slug], queryFn: () => getPublicShop(slug) })
   const { session, loading } = useAuth()
-  const [authView, setAuthView] = useState<AuthView | null>(null)
+  const navigate = useNavigate()
+  const openAuth = (view: AuthView) => navigate(shopAuthPath(slug, view), { state: { from: location.pathname } })
   useShopAccent(shop.data?.cor_destaque)
   useEffect(() => { if (shop.data) rememberShop(slug) }, [shop.data, slug])
   const template = isTemplateId(shop.data?.template) ? shop.data.template : DEFAULT_TEMPLATE
 
   return (
     <div className="min-h-dvh bg-background text-foreground" style={shop.data ? paletteStyle(template) : undefined}>
-      <ClientHeader slug={slug} shop={shop.data} onLogin={() => setAuthView("entrar")} />
+      <ClientHeader slug={slug} shop={shop.data} onLogin={() => openAuth("entrar")} />
       {!shop.data && shop.isPending ? (
         <main className="mx-auto flex w-[min(100%-2rem,880px)] flex-col gap-6 py-10"><div role="status" aria-label="Carregando a barbearia" className="flex flex-col gap-3"><Skeleton className="h-10 w-2/3" /><Skeleton className="h-40 w-full" /></div></main>
       ) : !shop.data ? (
@@ -112,13 +115,12 @@ export function ClientBookings() {
       ) : loading ? (
         <main className="mx-auto flex w-[min(100%-2rem,880px)] flex-col gap-6 py-10"><Skeleton className="h-40 w-full" /></main>
       ) : !session ? (
-        <main className="mx-auto flex w-[min(100%-2rem,880px)] flex-col gap-6 py-10"><ClientLogin next={location.pathname} title={`Acesso — ${shop.data.nome}`} /></main>
+        <main className="mx-auto flex w-[min(100%-2rem,880px)] flex-col gap-6 py-10"><ClientLogin next={location.pathname} title={`Acesso — ${shop.data.nome}`} onOpen={openAuth} /></main>
       ) : (
         <AuthGuard loginPath={() => shopBookingsPath(slug)}>
           <ClientArea slug={slug} shop={shop.data} light={isLightTemplate(template)} userName={String(session.user.user_metadata?.full_name ?? session.user.user_metadata?.name ?? "")} />
         </AuthGuard>
       )}
-      <AuthDialog open={Boolean(authView) && !loading && !session} view={authView} next={location.pathname + location.search} notice={null} onViewChange={setAuthView} onClose={() => setAuthView(null)} />
     </div>
   )
 }
@@ -202,6 +204,7 @@ function ClientArea({ slug, shop, userName, light }: { slug: string; shop: Publi
             </div>}
           </header>
 
+          <CompleteWhatsApp />
           {isMissingSchema(bookings.error) ? (
             <Panel><EmptyState title="Reservas indisponíveis" description="O agendamento ainda está sendo preparado no banco de dados." /></Panel>
           ) : bookings.isError ? (
@@ -236,11 +239,12 @@ function ClientArea({ slug, shop, userName, light }: { slug: string; shop: Publi
 
 /** /acesso — porta neutra do cliente quando não sabemos de qual barbearia ele veio. */
 export function ClientAccess() {
+  const [searchParams] = useSearchParams() // ?erro= vindo do /auth/callback (ex.: e-mail confirmado em outro navegador)
   return (
     <div className="min-h-dvh bg-background text-foreground">
       <PublicHeader />
       <main className="mx-auto flex w-[min(100%-2rem,560px)] flex-col gap-6 py-10">
-        <ClientLogin next="/minhas-reservas" />
+        <ClientLogin next="/minhas-reservas" notice={CALLBACK_NOTICES[searchParams.get("erro") as CallbackError] ?? null} />
         <p className="text-center text-sm text-muted-foreground">Para agendar, abra a página da sua barbearia.</p>
       </main>
     </div>

@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   signUp: vi.fn(),
   requestPasswordReset: vi.fn(),
   updatePassword: vi.fn(),
+  finishAuthCallback: vi.fn(),
 }))
 
 vi.mock("@/features/home/api", () => ({ fetchMyBarbershops: mocks.fetchMyBarbershops }))
@@ -31,9 +32,12 @@ vi.mock("@/features/auth/services/auth", () => ({
   signUp: mocks.signUp,
   requestPasswordReset: mocks.requestPasswordReset,
   updatePassword: mocks.updatePassword,
+  finishAuthCallback: mocks.finishAuthCallback,
 }))
 
 import { routes } from "@/routes"
+import { rememberNext } from "./domain"
+import { toast } from "@/ui/sonner"
 
 const SESSION = { user: { id: "user-1", user_metadata: {} } }
 type Listener = (state: { event: string; session: unknown }) => void
@@ -63,11 +67,13 @@ const type = (label: string | RegExp, value: string) =>
 beforeEach(() => {
   vi.clearAllMocks()
   sessionStorage.clear()
+  localStorage.clear()
   listeners = new Set()
   mocks.getSession.mockResolvedValue(null)
   mocks.getCurrentUser.mockResolvedValue(SESSION.user)
   mocks.signOut.mockResolvedValue(undefined)
   mocks.fetchMyBarbershops.mockResolvedValue({ status: "unavailable" })
+  mocks.finishAuthCallback.mockResolvedValue({ recovery: false })
   mocks.onAuthStateChange.mockImplementation((listener: Listener) => {
     listeners.add(listener)
     return { subscription: { unsubscribe: () => listeners.delete(listener) } }
@@ -83,7 +89,7 @@ describe("popup: abrir e fechar", () => {
     fireEvent.click(await within(screen.getByRole("banner")).findByRole("button", { name: "Entrar" }))
 
     const popup = await dialog()
-    expect(router.state.location.pathname).toBe("/")
+    expect(router.state.location.pathname).toBe("/painel/entrar")
     expect(within(popup).getByRole("heading", { name: "Entrar" })).toBeInTheDocument()
     expect(within(popup).getByRole("button", { name: "Continuar com Google" })).toBeInTheDocument()
     expect(within(popup).getByLabelText("Email")).toHaveAttribute("autocomplete", "email")
@@ -130,7 +136,7 @@ describe("popup: abrir e fechar", () => {
     const router = renderAt("/dashboard")
 
     expect(await dialog()).toBeInTheDocument()
-    expect(router.state.location.pathname).toBe("/")
+    expect(router.state.location.pathname).toBe("/painel/entrar")
   })
 
   it("/login com sessão vai direto ao painel", async () => {
@@ -202,7 +208,7 @@ describe("login com email e senha", () => {
     fireEvent.click(within(popup).getByRole("button", { name: "Entrar" }))
 
     expect(await within(popup).findByRole("alert")).toHaveTextContent("Email ou senha incorretos.")
-    expect(router.state.location.pathname).toBe("/")
+    expect(router.state.location.pathname).toBe("/painel/entrar")
   })
 
   it("login aceito abre o painel", async () => {
@@ -216,6 +222,23 @@ describe("login com email e senha", () => {
 
     await waitFor(() => expect(router.state.location.pathname).toBe("/dashboard"))
     expect(mocks.signInWithPassword).toHaveBeenCalledWith("a@b.co", "correta")
+  })
+
+  it("conta só de cliente não entra pela porta do sistema: a sessão do PAINEL é encerrada e ela vai para a porta do cliente", async () => {
+    const info = vi.spyOn(toast, "info")
+    mocks.fetchMyBarbershops.mockResolvedValue({ status: "ok", barbershops: [{ id: "l1", nome: "Loja", slug: "loja", endereco: null, status: "ativo", papel: "cliente" }] })
+    mocks.signInWithPassword.mockImplementation(async () => { mocks.getSession.mockResolvedValue(SESSION); emit("SIGNED_IN", SESSION) })
+    const router = renderAt("/painel/entrar")
+    const popup = await dialog()
+
+    type("Email", "maria@b.co")
+    type("Senha", "correta")
+    fireEvent.click(within(popup).getByRole("button", { name: "Entrar" }))
+
+    await waitFor(() => expect(router.state.location.pathname).toBe("/acesso"))
+    expect(info).toHaveBeenCalledWith("Esta conta é de cliente. Entre pela página da barbearia para ver suas reservas.", { id: "conta-de-cliente" })
+    expect(mocks.signOut).toHaveBeenCalledWith("local", "painel")
+    expect(mocks.signOut).not.toHaveBeenCalledWith("local", "cliente")
   })
 
   it("login aceito volta ao destino protegido pedido antes", async () => {
@@ -260,21 +283,44 @@ describe("criar conta", () => {
   function fillSignUp() {
     type("Nome", "Ana Lima")
     type("Email", "ana@b.co")
+    type("WhatsApp", "(64) 99275-0733")
     type("Senha", "12345678")
     type("Confirmar senha", "12345678")
   }
 
-  it("com confirmação de email, pede para verificar a caixa de entrada e não entra", async () => {
+  it("T1 — cadastro pede nome, e-mail, WhatsApp e senha, e envia o WhatsApp para a conta", async () => {
     mocks.signUp.mockResolvedValue({ needsEmailConfirmation: true })
+    const { router, popup } = await openSignUp()
+
+    fillSignUp()
+    type("WhatsApp", "")
+    fireEvent.click(within(popup).getByRole("button", { name: "Criar conta" }))
+    expect(await within(popup).findByText("Informe o WhatsApp com DDD, como +55 11 91234-5678.")).toBeInTheDocument()
+    expect(mocks.signUp).not.toHaveBeenCalled()
+
+    type("WhatsApp", "(64) 99275-0733")
+    fireEvent.click(within(popup).getByRole("button", { name: "Criar conta" }))
+    expect(await within(popup).findByRole("heading", { name: "Confirme seu email" })).toBeInTheDocument()
+    expect(popup).toHaveTextContent("ana@b.co")
+    expect(mocks.signUp).toHaveBeenCalledWith({ nome: "Ana Lima", email: "ana@b.co", senha: "12345678", whatsapp: "64992750733" }, "/dashboard")
+    expect(router.state.location.pathname).toBe("/painel/criar-conta")
+  })
+
+  it("R2 — e-mail já cadastrado orienta a entrar ou recuperar a senha, sem criar outra conta", async () => {
+    mocks.signUp.mockResolvedValue({ needsEmailConfirmation: false, alreadyRegistered: true })
     const { router, popup } = await openSignUp()
 
     fillSignUp()
     fireEvent.click(within(popup).getByRole("button", { name: "Criar conta" }))
 
-    expect(await within(popup).findByRole("heading", { name: "Confirme seu email" })).toBeInTheDocument()
+    expect(await within(popup).findByRole("heading", { name: "Este e-mail já tem cadastro" })).toBeInTheDocument()
     expect(popup).toHaveTextContent("ana@b.co")
-    expect(mocks.signUp).toHaveBeenCalledWith({ nome: "Ana Lima", email: "ana@b.co", senha: "12345678" }, "/dashboard")
-    expect(router.state.location.pathname).toBe("/")
+    expect(within(popup).queryByRole("heading", { name: "Confirme seu email" })).not.toBeInTheDocument()
+    expect(within(popup).getByRole("button", { name: "Entrar" })).toBeInTheDocument()
+    fireEvent.click(within(popup).getByRole("button", { name: "Recuperar senha" }))
+    expect(await within(popup).findByRole("heading", { name: "Recuperar senha" })).toBeInTheDocument()
+    expect(mocks.signUp).toHaveBeenCalledTimes(1)
+    expect(router.state.location.pathname).toBe("/painel/recuperar")
   })
 
   it("com sessão criada pelo servidor, abre o painel", async () => {
@@ -328,7 +374,7 @@ describe("recuperar senha", () => {
 
     expect(await within(popup).findByRole("heading", { name: "Verifique seu email" })).toBeInTheDocument()
     expect(popup).toHaveTextContent("Se houver uma conta para ana@b.co")
-    expect(mocks.requestPasswordReset).toHaveBeenCalledWith("ana@b.co")
+    expect(mocks.requestPasswordReset).toHaveBeenCalledWith("ana@b.co", "/dashboard")
 
     fireEvent.click(within(popup).getByRole("button", { name: "Voltar para Entrar" }))
     expect(await within(popup).findByRole("heading", { name: "Entrar" })).toBeInTheDocument()
@@ -354,7 +400,7 @@ describe("sessão recusada", () => {
     const popup = await dialog()
     expect(popup).toHaveTextContent("Sua sessão expirou. Entre novamente.")
     await new Promise((resolve) => setTimeout(resolve, 30))
-    expect(router.state.location.pathname).toBe("/")
+    expect(router.state.location.pathname).toBe("/painel/entrar")
     expect(mocks.getCurrentUser).toHaveBeenCalledTimes(1)
   })
 })
@@ -378,9 +424,9 @@ describe("retorno em /auth/callback", () => {
   const at = (suffix: string) => window.history.replaceState(null, "", `/auth/callback${suffix}`)
 
   it("com sessão, vai ao destino guardado", async () => {
-    sessionStorage.setItem("barberia:auth-next", "/dashboard/contas")
+    localStorage.setItem("barberia:auth-next", JSON.stringify({ path: "/dashboard/contas", exp: Date.now() + 60_000 }))
     mocks.getSession.mockResolvedValue(SESSION)
-    at("#access_token=a")
+    at("#access_token=a&refresh_token=r")
     const router = renderAt("/auth/callback")
 
     await waitFor(() => expect(router.state.location.pathname).toBe("/dashboard/contas"))
@@ -388,10 +434,18 @@ describe("retorno em /auth/callback", () => {
 
   it("sem destino guardado, vai ao painel", async () => {
     mocks.getSession.mockResolvedValue(SESSION)
-    at("#access_token=a")
+    at("#access_token=a&refresh_token=r")
     const router = renderAt("/auth/callback")
 
     await waitFor(() => expect(router.state.location.pathname).toBe("/dashboard"))
+  })
+
+  it("sem destino guardado, a conta do cliente volta para a barbearia onde foi criada", async () => {
+    mocks.getSession.mockResolvedValue({ user: { id: "user-1", user_metadata: { signup_next: "/barbearia-teste" } } })
+    at("?area=cliente#access_token=a&refresh_token=r")
+    const router = renderAt("/auth/callback")
+
+    await waitFor(() => expect(router.state.location.pathname).toBe("/barbearia-teste"))
   })
 
   it("link expirado volta ao popup com a explicação", async () => {
@@ -402,7 +456,8 @@ describe("retorno em /auth/callback", () => {
   })
 
   it("retorno sem sessão não falha em silêncio", async () => {
-    at("#access_token=invalido")
+    mocks.finishAuthCallback.mockRejectedValue(new Error("token inválido"))
+    at("#access_token=invalido&refresh_token=r")
     renderAt("/auth/callback")
 
     expect(await dialog()).toHaveTextContent("Não foi possível concluir a autenticação.")
@@ -416,10 +471,25 @@ describe("retorno em /auth/callback", () => {
     expect(within(popup).queryByRole("alert")).not.toBeInTheDocument()
   })
 
+  it("recuperação pedida na barbearia volta para a área do cliente dela, não para o painel", async () => {
+    rememberNext("/barbearia-do-tico/minhas-reservas")
+    mocks.getSession.mockResolvedValue(SESSION)
+    mocks.updatePassword.mockResolvedValue(undefined)
+    at("#access_token=a&refresh_token=r&type=recovery")
+    const router = renderAt("/auth/callback")
+
+    expect(await screen.findByRole("heading", { name: "Definir nova senha" })).toBeInTheDocument()
+    type("Nova senha", "12345678")
+    type("Confirmar senha", "12345678")
+    fireEvent.click(screen.getByRole("button", { name: "Salvar nova senha" }))
+
+    await waitFor(() => expect(router.state.location.pathname).toBe("/barbearia-do-tico/minhas-reservas"))
+  })
+
   it("recuperação pede a nova senha e depois abre o painel", async () => {
     mocks.getSession.mockResolvedValue(SESSION)
     mocks.updatePassword.mockResolvedValue(undefined)
-    at("#access_token=a&type=recovery")
+    at("#access_token=a&refresh_token=r&type=recovery")
     const router = renderAt("/auth/callback")
 
     expect(await screen.findByRole("heading", { name: "Definir nova senha" })).toBeInTheDocument()
@@ -436,10 +506,105 @@ describe("retorno em /auth/callback", () => {
     fireEvent.click(screen.getByRole("button", { name: "Salvar nova senha" }))
 
     await waitFor(() => expect(router.state.location.pathname).toBe("/dashboard"))
-    expect(mocks.updatePassword).toHaveBeenCalledWith("12345678")
+    expect(mocks.updatePassword).toHaveBeenCalledWith("12345678", "painel")
   })
 })
 
+
+describe("retorno em /auth/callback: só a área que iniciou o fluxo", () => {
+  const at = (suffix: string) => window.history.replaceState(null, "", `/auth/callback${suffix}`)
+
+  it("Google iniciado na barbearia conclui no cliente da barbearia e volta para ela", async () => {
+    rememberNext("/barbearia-do-tico/minhas-reservas")
+    mocks.getSession.mockResolvedValue(SESSION)
+    at("?area=cliente&code=c1&sb_flow_id=f1")
+    const router = renderAt("/auth/callback")
+
+    await waitFor(() => expect(router.state.location.pathname).toBe("/barbearia-do-tico/minhas-reservas"))
+    expect(mocks.finishAuthCallback).toHaveBeenCalledWith("cliente", expect.objectContaining({ code: "c1" }))
+    expect(mocks.finishAuthCallback).not.toHaveBeenCalledWith("painel", expect.anything())
+  })
+
+  it("recuperação da barbearia: a nova senha é gravada na sessão do cliente", async () => {
+    rememberNext("/barbearia-do-tico/minhas-reservas")
+    mocks.getSession.mockResolvedValue(SESSION)
+    mocks.finishAuthCallback.mockResolvedValue({ recovery: true })
+    mocks.updatePassword.mockResolvedValue(undefined)
+    at("?area=cliente&tipo=recuperar&code=c2&sb_flow_id=f2")
+    const router = renderAt("/auth/callback")
+
+    expect(await screen.findByRole("heading", { name: "Definir nova senha" })).toBeInTheDocument()
+    type("Nova senha", "12345678")
+    type("Confirmar senha", "12345678")
+    fireEvent.click(screen.getByRole("button", { name: "Salvar nova senha" }))
+
+    await waitFor(() => expect(router.state.location.pathname).toBe("/barbearia-do-tico/minhas-reservas"))
+    expect(mocks.updatePassword).toHaveBeenCalledWith("12345678", "cliente")
+  })
+
+  it("destino guardado por um fluxo da outra área não vale: o Google do painel volta ao painel", async () => {
+    rememberNext("/barbearia-do-tico/minhas-reservas") // o cliente iniciou um fluxo depois, em outra aba
+    mocks.getSession.mockResolvedValue(SESSION)
+    at("?area=painel&code=c4")
+    const router = renderAt("/auth/callback")
+
+    await waitFor(() => expect(router.state.location.pathname).toBe("/dashboard"))
+    expect(mocks.finishAuthCallback).toHaveBeenCalledWith("painel", expect.objectContaining({ code: "c4" }))
+  })
+
+  it("recuperação aberta em outro aparelho (token_hash, sem destino guardado): nova senha no cliente e volta à barbearia", async () => {
+    mocks.getSession.mockResolvedValue(SESSION)
+    mocks.finishAuthCallback.mockResolvedValue({ recovery: true })
+    mocks.updatePassword.mockResolvedValue(undefined)
+    at("?area=cliente&tipo=recuperar&volta=%2Fbarbearia-do-tico%2Fminhas-reservas#token_hash=pkce_h1&type=recovery")
+    const router = renderAt("/auth/callback")
+
+    expect(await screen.findByRole("heading", { name: "Definir nova senha" })).toBeInTheDocument()
+    expect(mocks.finishAuthCallback).toHaveBeenCalledWith("cliente", expect.objectContaining({ tokenHash: "pkce_h1", isRecovery: true }))
+    expect(window.location.search + window.location.hash).toBe("?area=cliente") // o token saiu do endereço e do histórico
+    type("Nova senha", "12345678")
+    type("Confirmar senha", "12345678")
+    fireEvent.click(screen.getByRole("button", { name: "Salvar nova senha" }))
+
+    await waitFor(() => expect(router.state.location.pathname).toBe("/barbearia-do-tico/minhas-reservas"))
+    expect(mocks.updatePassword).toHaveBeenCalledWith("12345678", "cliente")
+  })
+
+  it("confirmação de cadastro aberta em outro aparelho (token_hash): entra e volta à barbearia do link", async () => {
+    mocks.getSession.mockResolvedValue(SESSION)
+    at("?area=cliente&tipo=cadastro&volta=%2Fbarbearia-do-tico#token_hash=pkce_h2&type=email")
+    const router = renderAt("/auth/callback")
+
+    await waitFor(() => expect(router.state.location.pathname).toBe("/barbearia-do-tico"))
+    expect(mocks.finishAuthCallback).toHaveBeenCalledWith("cliente", expect.objectContaining({ tokenHash: "pkce_h2", isRecovery: false }))
+  })
+
+  it("link do e-mail expirado ou já usado volta à porta da barbearia com a opção de pedir outro", async () => {
+    mocks.finishAuthCallback.mockRejectedValue({ code: "otp_expired" })
+    at("?area=cliente&tipo=recuperar&volta=%2Fbarbearia-do-tico%2Fminhas-reservas#token_hash=pkce_h3&type=recovery")
+    const router = renderAt("/auth/callback")
+
+    await waitFor(() => expect(router.state.location.pathname).toBe("/barbearia-do-tico/entrar"))
+    expect(await dialog()).toHaveTextContent("Este link expirou ou já foi usado.")
+  })
+
+  it("porta de outra área gravada no link é ignorada (sem redirecionamento para fora da área)", async () => {
+    mocks.getSession.mockResolvedValue(SESSION)
+    at("?area=painel&tipo=cadastro&volta=%2Fbarbearia-do-tico%2Fminhas-reservas#token_hash=pkce_h4&type=email")
+    const router = renderAt("/auth/callback")
+
+    await waitFor(() => expect(router.state.location.pathname).toBe("/dashboard"))
+  })
+
+  it("link de cadastro aberto em outro navegador: avisa que o e-mail foi confirmado e pede para entrar", async () => {
+    mocks.finishAuthCallback.mockRejectedValue({ code: "pkce_code_verifier_not_found" })
+    at("?area=cliente&tipo=cadastro&code=c3")
+    const router = renderAt("/auth/callback")
+
+    await waitFor(() => expect(router.state.location.pathname).toBe("/acesso"))
+    expect(await dialog()).toHaveTextContent("E-mail confirmado. Agora entre com seu e-mail e senha.")
+  })
+})
 
 describe("portas separadas: cliente final x gestão", () => {
   it("/minhas-reservas sem login leva ao acesso do cliente (neutro), não à landing do sistema", async () => {
@@ -457,15 +622,16 @@ describe("portas separadas: cliente final x gestão", () => {
 
   it("rota de gestão sem login continua indo para a entrada do sistema", async () => {
     const router = renderAt("/dashboard/agendamentos")
-    await waitFor(() => expect(router.state.location.pathname).toBe("/"))
-    expect(router.state.location.search).toBe("?auth=entrar")
+    await waitFor(() => expect(router.state.location.pathname).toBe("/painel/entrar"))
+    expect(router.state.location.search).toBe("")
   })
 
-  it("quem só é cliente não abre telas de gestão: volta para as reservas", async () => {
+  it("quem só é cliente não abre telas de gestão: vai para a porta do cliente da última barbearia", async () => {
+    localStorage.setItem("barberia:ultima-barbearia", "barbearia-do-tico")
     mocks.getSession.mockResolvedValue(SESSION)
     mocks.fetchMyBarbershops.mockResolvedValue({ status: "ok", barbershops: [{ id: "l1", nome: "Loja", slug: "loja", endereco: null, status: "ativo", papel: "cliente" }] })
     const router = renderAt("/dashboard/financeiro")
-    await waitFor(() => expect(router.state.location.pathname).toBe("/minhas-reservas"))
+    await waitFor(() => expect(router.state.location.pathname).toBe("/barbearia-do-tico/minhas-reservas"))
   })
 
   it("quem tem papel na equipe abre a gestão normalmente", async () => {

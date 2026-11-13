@@ -1,4 +1,4 @@
-import { isReservedSlug } from "@/lib/shopPaths"
+import { isReservedSlug, toAuthArea } from "@/lib/shopPaths"
 
 export type AuthView = "entrar" | "criar-conta" | "recuperar"
 
@@ -20,6 +20,15 @@ const NEXT_KEY = "barberia:auth-next"
 /** Endereço de barbearia na raiz: /slug ou /slug/minhas-reservas (nunca uma palavra reservada do sistema). */
 const SHOP_PATH = /^\/([a-z0-9]+(?:-[a-z0-9]+)*)(?:\/(?:minhas-reservas|servicos|profissionais|galeria|contato))?(?:[?#]|$)/
 
+/** Porta do sistema (dono e equipe): /painel/entrar, /painel/criar-conta, /painel/recuperar. */
+export const panelAuthPath = (view: AuthView = "entrar"): string => `/painel/${view}`
+
+/** Porta certa para um destino: página de barbearia → porta do cliente dela (/slug/entrar); o resto → porta do sistema. */
+export function authDoor(next: string, view: AuthView = "entrar"): string {
+  const shop = SHOP_PATH.exec(next)
+  return shop && !isReservedSlug(shop[1]) ? `/${shop[1]}/${view}` : panelAuthPath(view)
+}
+
 /** Aceita apenas destinos conhecidos (área protegida e páginas das barbearias), o que impede redirecionamento para outro site. */
 export function safeNext(path: unknown): string {
   if (typeof path !== "string") return DEFAULT_NEXT
@@ -30,15 +39,39 @@ export function safeNext(path: unknown): string {
   return path
 }
 
-/** Guarda o destino no navegador porque o OAuth e o email saem da aplicação antes de voltar. */
+const NEXT_TTL_MS = 24 * 60 * 60 * 1000
+
+/**
+ * Guarda o destino no navegador porque o OAuth e o e-mail saem da aplicação antes de voltar. Fica no localStorage
+ * (o link de confirmação do e-mail abre em outra aba, que não enxerga o sessionStorage) e vence em 24 h.
+ */
 export function rememberNext(path: unknown) {
-  sessionStorage.setItem(NEXT_KEY, safeNext(path))
+  try {
+    localStorage.setItem(NEXT_KEY, JSON.stringify({ path: safeNext(path), exp: Date.now() + NEXT_TTL_MS }))
+  } catch {
+    // navegador sem armazenamento: o retorno usa o destino da conta ou o painel
+  }
 }
 
-export function consumeNext(): string {
-  const next = safeNext(sessionStorage.getItem(NEXT_KEY))
-  sessionStorage.removeItem(NEXT_KEY)
-  return next
+/**
+ * Destino guardado, uma única vez. Sem ele (outro aparelho ou navegador), usa `fallback` — a barbearia onde a conta
+ * foi criada — e, por fim, o painel. Tudo passa por `safeNext`.
+ */
+export function consumeNext(fallback?: unknown): string {
+  const stored = peekNext()
+  try { localStorage.removeItem(NEXT_KEY) } catch { /* armazenamento indisponível */ }
+  return safeNext(stored ?? fallback)
+}
+
+/** Destino guardado (sem consumir), ou null se não houver ou tiver vencido. */
+export function peekNext(): string | null {
+  try {
+    const saved = JSON.parse(localStorage.getItem(NEXT_KEY) ?? "null") as { path?: unknown; exp?: unknown } | null
+    if (saved && typeof saved.exp === "number" && saved.exp > Date.now() && typeof saved.path === "string") return saved.path
+  } catch {
+    // valor adulterado ou armazenamento indisponível
+  }
+  return null
 }
 
 export const MIN_PASSWORD_LENGTH = 8
@@ -103,17 +136,22 @@ const ERROR_MESSAGES: Record<string, string> = {
 export function authErrorMessage(error: unknown): string {
   const { code, name, status } = (error ?? {}) as { code?: string; name?: string; status?: number }
   if (code && ERROR_MESSAGES[code]) return ERROR_MESSAGES[code]
+  // A SDK marca todo HTTP 5xx como "retryable": é falha do servidor (ex.: envio de e-mail recusado), não da internet da pessoa
+  if (typeof status === "number" && status >= 500) return "O servidor não conseguiu concluir agora. Tente de novo em alguns minutos."
   if (name === "AuthRetryableFetchError" || status === 0 || error instanceof TypeError) {
     return "Sem conexão com o servidor. Verifique sua internet e tente de novo."
   }
   return "Não foi possível concluir. Tente novamente."
 }
 
-export type CallbackError = "link-expirado" | "falha"
+export type CallbackError = "link-expirado" | "falha" | "confirmado" | "outro-navegador"
 
 export const CALLBACK_NOTICES: Record<CallbackError, string> = {
-  "link-expirado": "Este link expirou ou já foi usado. Peça um novo.",
+  "link-expirado": "Este link expirou ou já foi usado. Entre com e-mail e senha ou peça um novo em “Esqueci minha senha”.",
   falha: "Não foi possível concluir a autenticação. Tente novamente.",
+  // E-mails enviados antes do modelo com token_hash: o código PKCE só conclui no navegador em que o fluxo começou
+  confirmado: "E-mail confirmado. Agora entre com seu e-mail e senha.",
+  "outro-navegador": "Abra o link no mesmo navegador em que pediu a nova senha, ou peça um novo link aqui.",
 }
 
 export const SESSION_REJECTED_NOTICE = "Sua sessão expirou. Entre novamente."
@@ -125,9 +163,20 @@ export function parseAuthCallback(hash: string, search: string) {
   const hasError = params.has("error") || params.has("error_code")
   const error: CallbackError | null = !hasError ? null : params.get("error_code") === "otp_expired" ? "link-expirado" : "falha"
 
+  const access_token = params.get("access_token")
+  const refresh_token = params.get("refresh_token")
   return {
     error,
-    isRecovery: params.get("type") === "recovery",
-    hasAuthParams: hasError || params.has("access_token") || params.has("code"),
+    isRecovery: params.get("type") === "recovery" || params.get("tipo") === "recuperar",
+    hasAuthParams: hasError || params.has("access_token") || params.has("code") || params.has("token_hash"),
+    /** Área que iniciou o fluxo (colocada no link por `callbackUrl`); links antigos não têm. */
+    area: toAuthArea(params.get("area")),
+    tipo: params.get("tipo"),
+    code: params.get("code"),
+    /** Link do e-mail (modelo com `{{ .TokenHash }}`): conclui em qualquer navegador. */
+    tokenHash: params.get("token_hash"),
+    /** Porta de origem gravada no link (`callbackUrl`); validada pela área no /auth/callback. */
+    volta: params.get("volta"),
+    tokens: access_token && refresh_token ? { access_token, refresh_token } : null,
   }
 }

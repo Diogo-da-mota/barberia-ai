@@ -32,3 +32,8 @@ supabase/.temp
 *.njsproj
 *.sln
 *.sw?
+.vercel
+.env*
+
+# backups locais dos modelos de e-mail do Supabase (configurar_templates.py)
+supabase/email-templates/backup/

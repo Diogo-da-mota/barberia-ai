@@ -1,4 +1,5 @@
 import { supabase } from "@/lib/supabase"
+import { toast } from "@/ui/sonner"
 import type { BookingRow, CustomerBooking, HoursRow, PublicShopData, Slot } from "./domain"
 import { addDays } from "./domain"
 
@@ -38,6 +39,37 @@ export async function createBooking(input: BookingInput): Promise<string> {
     p_idempotency_key: input.key,
   })
   if (error) throw error
+  // Conta sem WhatsApp (ex.: entrou com Google): guarda o número da reserva no perfil (só preenche se estiver vazio; 0022)
+  try { await supabase.rpc("fill_my_whatsapp", { p_whatsapp: input.whatsapp }) } catch { /* não impede a reserva */ }
+  return data as string
+}
+
+/** WhatsApp salvo no perfil da conta logada (null = ainda não informado, ex.: entrou com Google). */
+export async function fetchMyWhatsapp(): Promise<string | null> {
+  const { data: { session } } = await supabase.auth.getSession()
+  const userId = session?.user.id
+  if (!userId) return null
+  const { data, error } = await supabase.from("profiles").select("whatsapp").eq("id", userId).maybeSingle()
+  if (error) throw error
+  return (data as { whatsapp: string | null } | null)?.whatsapp ?? null
+}
+
+/** Preenche o WhatsApp do perfil só se estiver vazio (o banco nunca troca um número já salvo). */
+export async function fillMyWhatsapp(whatsapp: string): Promise<void> {
+  const { error } = await supabase.rpc("fill_my_whatsapp", { p_whatsapp: whatsapp })
+  if (error) throw error
+}
+
+/** Agendamento feito pela gestão para cliente sem conta (0022): a reserva não fica na conta de quem agendou. */
+export async function createManualBooking(input: {
+  shopId: string; serviceId: string; professionalId: string; inicio: string; nome: string; whatsapp: string; email: string; lembretes: boolean; key: string
+}): Promise<string> {
+  const { data, error } = await supabase.rpc("create_manual_booking", {
+    p_barbershop_id: input.shopId, p_service_id: input.serviceId, p_professional_id: input.professionalId, p_inicio: input.inicio,
+    p_nome: input.nome, p_whatsapp: input.whatsapp, p_consent_lembretes: input.lembretes, p_idempotency_key: input.key,
+    p_email: input.email.trim() || null,
+  })
+  if (error) throw error
   return data as string
 }
 
@@ -57,10 +89,27 @@ export async function setBookingStatus(id: string, status: "confirmado" | "concl
 }
 
 /** Reservas do cliente logado. O RLS já limita ao próprio usuário. */
+/**
+ * Reservas que a conta logada fez como cliente. O filtro por `customer_id` é obrigatório: para a equipe o banco também
+ * libera as reservas da barbearia (RLS), e elas não podem aparecer misturadas em "Minhas reservas".
+ */
 export async function fetchMyBookings(): Promise<BookingRow[]> {
+  const { data: { session } } = await supabase.auth.getSession()
+  const userId = session?.user.id
+  if (!userId) return []
+  // Traz para a conta as reservas que a barbearia fez com o mesmo e-mail confirmado e o mesmo WhatsApp (0022; o banco valida)
+  try {
+    const { data: linked } = await supabase.rpc("link_my_bookings")
+    if (typeof linked === "number" && linked > 0) {
+      toast.success(linked === 1
+        ? "Encontramos 1 reserva feita pela barbearia e ela já está na sua conta."
+        : `Encontramos ${linked} reservas feitas pela barbearia e elas já estão na sua conta.`)
+    }
+  } catch { /* sem vínculo novo: segue com as reservas da conta */ }
   const { data, error } = await supabase
     .from("bookings")
     .select(`${BOOKING_COLUMNS}, barbershops(nome, fuso, slug)`)
+    .eq("customer_id", userId)
     .order("inicio", { ascending: false })
     .limit(100)
   if (error) throw error

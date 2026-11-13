@@ -5,6 +5,7 @@ import { Button } from "@/ui/button"
 import { EmptyState, Panel, StatusBadge } from "@/ui/finance"
 import { Skeleton } from "@/ui/skeleton"
 import { useReservations } from "../hooks/useReservations"
+import { CompleteWhatsApp } from "../components/CompleteWhatsApp"
 import { ReservationCard } from "../components/ReservationCard"
 import { formatDateTime, isMissingSchema, STATUS_LABEL, type BookingRow, type BookingStatus } from "../domain"
 import { shopPath } from "@/lib/shopPaths"
@@ -51,6 +52,7 @@ export function MyBookingsView({ slug }: { slug?: string }) {
   return (
     <>
       <div className="flex flex-col gap-6">
+        <CompleteWhatsApp />
         {isMissingSchema(bookings.error) ? (
           <Panel><EmptyState title="Reservas indisponíveis" description="O agendamento ainda está sendo preparado no banco de dados." /></Panel>
         ) : bookings.isError ? (

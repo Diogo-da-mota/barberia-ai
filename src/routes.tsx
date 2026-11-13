@@ -1,5 +1,5 @@
 import { createBrowserRouter, Navigate, Outlet, useLocation, useParams, type RouteObject } from "react-router-dom"
-import { SHOP_SECTIONS, shopBookingsPath, shopPath } from "@/lib/shopPaths"
+import { SHOP_AUTH_VIEWS, SHOP_SECTIONS, shopBookingsPath, shopPath } from "@/lib/shopPaths"
 import { Finance } from "@/features/finance/pages/Finance"
 import { Messages } from "@/features/messaging/pages/Messages"
 import { SiteSettings } from "@/features/site/pages/SiteSettings"
@@ -20,8 +20,11 @@ import { ClientAccess, ClientBookings } from "@/features/booking/pages/ClientBoo
 import { clientAccessPath } from "@/features/auth/lastShop"
 import { useAuth } from "@/features/auth/hooks/useAuth"
 import { fetchMyBarbershops } from "@/features/home/api"
-import { isCustomerOnly } from "@/features/home/domain"
+import { isCustomerOnly, isStaff } from "@/features/home/domain"
+import { panelAuthPath } from "@/features/auth/domain"
 import { useQuery } from "@tanstack/react-query"
+import { useEffect } from "react"
+import { toast } from "@/ui/sonner"
 
 /** /e/:slug[/minhas-reservas] → /:slug[/minhas-reservas], preservando parâmetros de consulta e âncora. Nunca aponta para si mesma. */
 export function LegacyShopRedirect({ bookings = false }: { bookings?: boolean }) {
@@ -32,22 +35,45 @@ export function LegacyShopRedirect({ bookings = false }: { bookings?: boolean })
 
 function LoginRedirect() {
   const { state } = useLocation()
-  return <Navigate to="/?auth=entrar" replace state={state} />
+  return <Navigate to={panelAuthPath()} replace state={state} />
 }
 
-/** Rotas de gestão: quem só tem vínculo de cliente volta para a área do cliente. A segurança real continua no banco (RLS). */
+/**
+ * Painel (/dashboard…): conta que só é cliente não fica logada aqui. A sessão do PAINEL é encerrada (a do cliente, se houver,
+ * continua) e a pessoa vai para a porta do cliente. Conta sem nenhum vínculo segue (dono novo cria a barbearia). A segurança
+ * real continua no banco (RLS).
+ */
+function PanelGate() {
+  const { session, logout } = useAuth()
+  const userId = session?.user.id
+  const shops = useQuery({ queryKey: ["my-barbershops", userId], queryFn: () => fetchMyBarbershops(userId!), enabled: Boolean(userId) })
+  const refused = shops.data?.status === "ok" && isCustomerOnly(shops.data.barbershops)
+  useEffect(() => {
+    if (!refused) return
+    toast.info("Esta conta é de cliente. Entre pela página da barbearia para ver suas reservas.", { id: "conta-de-cliente" })
+    void logout().catch(() => undefined)
+  }, [refused, logout])
+  if (refused) return <Navigate to={clientAccessPath()} replace />
+  return <Outlet />
+}
+
+/** Rotas de gestão: só para quem é da equipe (proprietário, gerente ou barbeiro); quem ainda não tem barbearia volta ao Início. */
 function StaffRoute() {
   const { session } = useAuth()
   const userId = session?.user.id
   const shops = useQuery({ queryKey: ["my-barbershops", userId], queryFn: () => fetchMyBarbershops(userId!), enabled: Boolean(userId) })
-  if (shops.data?.status === "ok" && isCustomerOnly(shops.data.barbershops)) return <Navigate to="/minhas-reservas" replace />
+  const list = shops.data?.status === "ok" ? shops.data.barbershops : null
+  if (list && !isStaff(list)) return <Navigate to="/dashboard" replace />
   return <Outlet />
 }
 
 export const routes: RouteObject[] = [
   // Rotas públicas (não exigem sessão)
   { path: "/", element: <Landing /> },
+  // Porta do sistema (dono e equipe). /login e /?auth=… (links antigos) levam para cá.
   { path: "/login", element: <LoginRedirect /> },
+  { path: "/painel", element: <Navigate to={panelAuthPath()} replace /> },
+  { path: "/painel/:view", element: <Landing /> },
   { path: "/auth/callback", element: <AuthCallback /> },
   { path: "/acesso", element: <ClientAccess /> },
   { path: "/convite", element: <AcceptInvite /> },
@@ -58,6 +84,8 @@ export const routes: RouteObject[] = [
   // e as palavras do sistema são reservadas (src/lib/shopPaths.ts) para nenhuma barbearia ocupar esses nomes.
   { path: "/:slug", element: <PublicShop /> },
   { path: "/:slug/minhas-reservas", element: <ClientBookings /> },
+  // Porta do cliente da barbearia: /slug/entrar, /slug/criar-conta, /slug/recuperar (a página da barbearia com o acesso aberto)
+  ...SHOP_AUTH_VIEWS.map((view) => ({ path: `/:slug/${view}`, element: <PublicShop /> })),
   ...SHOP_SECTIONS.map((section) => ({ path: `/:slug/${section}`, element: <PublicShop /> })),
 
   // Área do cliente (exige sessão confirmada pelo servidor)
@@ -68,7 +96,7 @@ export const routes: RouteObject[] = [
     path: "/dashboard",
     element: (
       <AuthGuard>
-        <Outlet />
+        <PanelGate />
       </AuthGuard>
     ),
     children: [

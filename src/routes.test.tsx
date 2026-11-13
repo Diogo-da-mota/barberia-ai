@@ -83,8 +83,8 @@ describe("rota protegida /dashboard", () => {
     mocks.getSession.mockResolvedValue(null)
     const router = renderAt("/dashboard/agendamentos")
 
-    await waitFor(() => expect(router.state.location.pathname).toBe("/"))
-    expect(router.state.location.search).toBe("?auth=entrar")
+    await waitFor(() => expect(router.state.location.pathname).toBe("/painel/entrar"))
+    expect(router.state.location.search).toBe("")
     expect(router.state.location.state).toEqual({ from: "/dashboard/agendamentos" })
     expect(screen.queryByText("Em desenvolvimento")).not.toBeInTheDocument()
   })
@@ -112,7 +112,7 @@ describe("rota protegida /dashboard", () => {
     mocks.getCurrentUser.mockRejectedValue(httpError(status))
     const router = renderAt("/dashboard")
 
-    await waitFor(() => expect(router.state.location.pathname).toBe("/"))
+    await waitFor(() => expect(router.state.location.pathname).toBe("/painel/entrar"))
     expect(mocks.signOut).toHaveBeenCalledWith("local")
     expect(screen.queryByText("Próximos atendimentos")).not.toBeInTheDocument()
   })
@@ -142,12 +142,19 @@ describe("demais rotas", () => {
     expect(paths.match(/"path":"\/?login"/g)).toHaveLength(1)
   })
 
+  it("links antigos /?auth=… vão para a porta do sistema /painel/…, mantendo o aviso", async () => {
+    mocks.getSession.mockResolvedValue(null)
+    const router = renderAt("/?auth=criar-conta&erro=falha")
+    await waitFor(() => expect(router.state.location.pathname).toBe("/painel/criar-conta"))
+    expect(router.state.location.search).toBe("?erro=falha")
+  })
+
   it("/login leva à Landing Page pedindo login", async () => {
     mocks.getSession.mockResolvedValue(null)
     const router = renderAt("/login")
 
-    await waitFor(() => expect(router.state.location.pathname).toBe("/"))
-    expect(router.state.location.search).toBe("?auth=entrar")
+    await waitFor(() => expect(router.state.location.pathname).toBe("/painel/entrar"))
+    expect(router.state.location.search).toBe("")
   })
 
   it("endereços desconhecidos com mais de um nível voltam à Landing Page", async () => {
@@ -171,8 +178,8 @@ describe("o painel não depende de botão: a proteção está nas rotas", () => 
     mocks.getSession.mockResolvedValue(null)
     for (const path of ["/dashboard", "/dashboard/financeiro", "/dashboard/equipe", "/dashboard/mais"]) {
       const router = renderAt(path)
-      await waitFor(() => expect(router.state.location.pathname, path).toBe("/"))
-      expect(router.state.location.search).toBe("?auth=entrar")
+      await waitFor(() => expect(router.state.location.pathname, path).toBe("/painel/entrar"))
+      expect(router.state.location.search).toBe("")
     }
   })
 
@@ -181,7 +188,7 @@ describe("o painel não depende de botão: a proteção está nas rotas", () => 
     mocks.fetchMyBarbershops.mockResolvedValue({ status: "ok", barbershops: [{ id: "b1", nome: "Loja", slug: "loja", endereco: null, status: "ativo", fuso: "America/Sao_Paulo", papel: "cliente" }] })
     for (const path of ["/dashboard/financeiro", "/dashboard/equipe", "/dashboard/mensagens", "/dashboard/site"]) {
       const router = renderAt(path)
-      await waitFor(() => expect(router.state.location.pathname, path).toBe("/minhas-reservas"))
+      await waitFor(() => expect(router.state.location.pathname, path).toBe("/acesso")) // porta do cliente; a sessão do painel é encerrada
     }
   })
 })

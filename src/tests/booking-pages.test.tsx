@@ -1,10 +1,11 @@
 /// <reference types="@testing-library/jest-dom/vitest" />
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react"
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import { createMemoryRouter, RouterProvider } from "react-router-dom"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { ThemeProvider } from "@/lib/theme"
+import { SHOP_AUTH_VIEWS } from "@/lib/shopPaths"
 
 const m = vi.hoisted(() => ({
   fetchMyBarbershops: vi.fn(), getCurrentUser: vi.fn(), getSession: vi.fn(), onAuthStateChange: vi.fn(), signOut: vi.fn(),
@@ -25,6 +26,7 @@ vi.mock("@/features/settings/api", () => ({ fetchShopDetails: m.fetchShopDetails
 vi.mock("@/features/booking/api", () => ({
   getPublicShop: m.getPublicShop, getAvailability: m.getAvailability, createBooking: m.createBooking, cancelBooking: m.cancelBooking,
   rescheduleBooking: m.rescheduleBooking, setBookingStatus: m.setBookingStatus, fetchMyBookings: m.fetchMyBookings,
+  fetchMyWhatsapp: async () => "11912345678", fillMyWhatsapp: async () => undefined,
   fetchShopBookings: m.fetchShopBookings, fetchBlocks: m.fetchBlocks, createBlock: m.createBlock, deleteBlock: m.deleteBlock,
   fetchWorkingHours: m.fetchWorkingHours, saveWorkingHours: m.saveWorkingHours, acceptInvite: m.acceptInvite,
   createInvite: m.createInvite, fetchInvites: m.fetchInvites, updateShopInfo: m.updateShopInfo, fetchCustomerBookings: m.fetchCustomerBookings, fetchCustomerConsents: m.fetchCustomerConsents,
@@ -49,7 +51,9 @@ const SLOT = { prof_id: "p1", prof_nome: "Ana", slot_inicio: "2099-01-10T12:00:0
 const session = { user: { id: "u1", user_metadata: {} } }
 
 function renderAt(path: string, routePath: string, element: React.ReactElement) {
-  const router = createMemoryRouter([{ path: routePath, element }, { path: "*", element: <p>outra</p> }], { initialEntries: [path] })
+  // snip:safe — a porta do cliente (/slug/entrar…) é a página da barbearia com o acesso aberto, como em src/routes.tsx
+  const doors = routePath.startsWith("/:slug") ? SHOP_AUTH_VIEWS.map((view) => ({ path: `/:slug/${view}`, element: <PublicShop /> })) : []
+  const router = createMemoryRouter([{ path: routePath, element }, ...doors, { path: "*", element: <p>outra</p> }], { initialEntries: [path] })
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   render(
     <ThemeProvider><QueryClientProvider client={client}><RouterProvider router={router} /></QueryClientProvider></ThemeProvider>
@@ -74,6 +78,7 @@ const booking = (over: Record<string, unknown> = {}) => ({
 beforeEach(() => {
   vi.clearAllMocks()
   sessionStorage.clear()
+  localStorage.clear()
   m.getSession.mockResolvedValue(session)
   m.getCurrentUser.mockResolvedValue({ id: "u1" })
   m.onAuthStateChange.mockReturnValue({ subscription: { unsubscribe: vi.fn() } })
@@ -123,6 +128,7 @@ describe("Página pública e agendamento", () => {
   })
 
   it("valida o contato antes de chamar o servidor", async () => {
+    m.fetchMyBookings.mockResolvedValue([]) // conta nova, sem reserva anterior: nada para preencher
     open()
     await chooseSlot()
     fireEvent.click(await screen.findByRole("button", { name: "Confirmar reserva" }))
@@ -154,7 +160,76 @@ describe("Página pública e agendamento", () => {
 
     expect(await screen.findByRole("dialog")).toBeInTheDocument()
     expect(m.createBooking).not.toHaveBeenCalled()
-    expect(JSON.parse(sessionStorage.getItem("barberia:booking-draft")!)).toMatchObject({ slug: "barbearia-teste", serviceId: "svc1", nome: "Maria" })
+    expect(JSON.parse(localStorage.getItem("barberia:booking-draft")!)).toMatchObject({ slug: "barbearia-teste", serviceId: "svc1", nome: "Maria", slot: SLOT })
+  })
+
+  it("entrando pelo pop-up na mesma página, a reserva reabre como estava", async () => {
+    const ouvintes: ((e: { session: unknown }) => void)[] = []
+    m.onAuthStateChange.mockImplementation((cb: (e: { session: unknown }) => void) => {
+      ouvintes.push(cb)
+      return { subscription: { unsubscribe: vi.fn() } }
+    })
+    m.getSession.mockResolvedValue(null)
+    open()
+    await chooseSlot()
+    type("Nome", "Maria")
+    type("WhatsApp", "(64) 99275-0733")
+    fireEvent.click(await screen.findByRole("button", { name: "Entrar para confirmar" }))
+    await screen.findByRole("dialog")
+
+    await act(async () => { for (const cb of ouvintes) cb({ session }) }) // login concluído
+    fireEvent.click(await screen.findByRole("button", { name: "Confirmar reserva" }))
+    await waitFor(() => expect(m.createBooking).toHaveBeenCalledWith(expect.objectContaining({ inicio: SLOT.slot_inicio, nome: "Maria", whatsapp: "64992750733" })))
+  })
+
+  const rascunho = (over: Record<string, unknown> = {}) =>
+    localStorage.setItem("barberia:booking-draft", JSON.stringify({
+      slug: "barbearia-teste", serviceId: "svc1", professionalId: "any", slot: SLOT, nome: "Maria", whatsapp: "(64) 99275-0733",
+      lembretes: true, marketing: false, exp: Date.now() + 60_000, ...over,
+    }))
+
+  it("volta do Google ou do e-mail com a conta aberta: reabre com serviço, horário e dados, e apaga o rascunho", async () => {
+    rascunho()
+    open()
+    fireEvent.click(await screen.findByRole("button", { name: "Confirmar reserva" }))
+    await waitFor(() => expect(m.createBooking).toHaveBeenCalledWith(expect.objectContaining({
+      serviceId: "svc1", inicio: SLOT.slot_inicio, nome: "Maria", whatsapp: "64992750733", lembretes: true,
+    })))
+    expect(localStorage.getItem("barberia:booking-draft")).toBeNull()
+  })
+
+  it("sem conta aberta, o rascunho não é aplicado (aparelho compartilhado não mostra dados de outra pessoa)", async () => {
+    m.getSession.mockResolvedValue(null)
+    rascunho()
+    open()
+    expect(await screen.findByRole("heading", { level: 1, name: "Barbearia Teste" })).toBeInTheDocument()
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
+    expect(screen.queryByDisplayValue("Maria")).not.toBeInTheDocument()
+  })
+
+  it("cliente com conta: nome e WhatsApp da última reserva já vêm preenchidos e a reserva sai com eles", async () => {
+    open()
+    await chooseSlot()
+    expect(await screen.findByDisplayValue("Cliente Um")).toBeInTheDocument()
+    expect(screen.getByLabelText("WhatsApp")).toHaveValue("+55 11 91234-5678")
+    fireEvent.click(screen.getByRole("button", { name: "Confirmar reserva" }))
+    await waitFor(() => expect(m.createBooking).toHaveBeenCalledWith(expect.objectContaining({ nome: "Cliente Um", whatsapp: "11912345678" })))
+  })
+
+  it("sem reserva anterior, o nome vem da conta", async () => {
+    m.fetchMyBookings.mockResolvedValue([])
+    m.getSession.mockResolvedValue({ user: { id: "u1", user_metadata: { full_name: "Maria Souza" } } })
+    open()
+    await chooseSlot()
+    expect(await screen.findByDisplayValue("Maria Souza")).toBeInTheDocument()
+    expect(screen.getByLabelText("WhatsApp")).toHaveValue("")
+  })
+
+  it("rascunho vencido (mais de 30 min) é ignorado", async () => {
+    rascunho({ exp: Date.now() - 1 })
+    open()
+    expect(await screen.findByRole("heading", { level: 1, name: "Barbearia Teste" })).toBeInTheDocument()
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
   })
 
   it("barbearia inexistente ou com erro tem estado próprio", async () => {
