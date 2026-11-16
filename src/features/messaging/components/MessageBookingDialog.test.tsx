@@ -4,11 +4,11 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 const m = vi.hoisted(() => ({
-  setBookingStatus: vi.fn(), cancelBooking: vi.fn(), rescheduleBooking: vi.fn(), getAvailability: vi.fn(),
+  setBookingStatus: vi.fn(), cancelBooking: vi.fn(), rescheduleBooking: vi.fn(), getAvailability: vi.fn(), getSlotGrid: vi.fn(),
   fetchPayments: vi.fn(), registerPayment: vi.fn(), confirmPayment: vi.fn(), discardPayment: vi.fn(),
 }))
 vi.mock("@/features/booking/api", () => ({
-  setBookingStatus: m.setBookingStatus, cancelBooking: m.cancelBooking, rescheduleBooking: m.rescheduleBooking, getAvailability: m.getAvailability,
+  setBookingStatus: m.setBookingStatus, cancelBooking: m.cancelBooking, rescheduleBooking: m.rescheduleBooking, getAvailability: m.getAvailability, getSlotGrid: m.getSlotGrid,
 }))
 vi.mock("@/features/finance/api", () => ({ fetchPayments: m.fetchPayments, registerPayment: m.registerPayment, confirmPayment: m.confirmPayment, discardPayment: m.discardPayment }))
 vi.mock("@/features/site/api", () => ({ publicMediaUrl: () => null }))
@@ -37,6 +37,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   m.fetchPayments.mockResolvedValue({ payments: [], refunds: [] })
   m.getAvailability.mockResolvedValue([{ prof_id: "p1", prof_nome: "Ana", slot_inicio: "2099-01-12T13:00:00.000Z" }])
+  m.getSlotGrid.mockResolvedValue([{ prof_id: "p1", prof_nome: "Ana", slot_inicio: "2099-01-12T13:00:00.000Z", livre: true }])
   for (const f of [m.setBookingStatus, m.cancelBooking, m.rescheduleBooking, m.registerPayment, m.confirmPayment, m.discardPayment]) f.mockResolvedValue(undefined)
 })
 
@@ -162,10 +163,10 @@ describe("pop-up da reserva (mensagens)", () => {
     await screen.findByText(/A receber/)
     fireEvent.click(botao("Reagendar")!)
     const secao = await screen.findByRole("region", { name: "Reagendar" })
-    expect(within(secao).getByRole("button", { name: "Escolha um horário" })).toBeDisabled()
+    expect(within(secao).getByRole("button", { name: "Confirmar novo horário" })).toBeDisabled()
     // o calendário usa o dia de hoje; o mock devolve um horário livre
     fireEvent.click(await within(secao).findByRole("button", { name: /^\d{2}:\d{2}$/ }))
     fireEvent.click(within(secao).getByRole("button", { name: /^Confirmar / }))
-    await waitFor(() => expect(m.rescheduleBooking).toHaveBeenCalledWith("b1", "2099-01-12T13:00:00.000Z", "p1"))
+    await waitFor(() => expect(m.rescheduleBooking).toHaveBeenCalledWith("b1", "2099-01-12T13:00:00.000Z", "p1", expect.any(String)))
   })
 })

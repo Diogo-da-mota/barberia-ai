@@ -73,7 +73,7 @@ describe("mensagens (F08-04)", () => {
       expect(lembrete, tipo).toContain("14:30")
     }
     expect(buildMessage("reserva_cancelada", base)).toMatch(/cancelad/i)
-    expect(buildMessage("reserva_reagendada", base)).toContain("14:30")
+    expect(buildMessage("reserva_reagendada", { ...base, fim: "2026-11-07T18:30:00Z" })).toContain("✂️ Corte — 1 hora.")
     expect(buildMessage("reativacao_30", base)).toMatch(/PARAR/)
     expect(buildMessage("calendar_upsert", base)).toBeNull() // não é mensagem ao cliente
   })
@@ -116,7 +116,7 @@ describe("textos editáveis da confirmação e do lembrete (renderTemplate)", ()
     expect(renderTemplate(DEFAULT_TEMPLATES.confirmacao, messageVariables(p))).toBe(
       "✅ Olá, Diogo! Seu agendamento está confirmado.\n\n✂️ Serviço: Corte\n👤 Profissional: João\n📅 Data: 09/11\n🕔 Horário: 17:00\n📍 Local: Barbearia do TICO")
     expect(renderTemplate(DEFAULT_TEMPLATES.lembrete, messageVariables(p))).toBe(
-      "⏰ Olá, Diogo! Faltam 30 minutos para o seu atendimento!\n\n✂️ Serviço: Corte\n👤 Profissional: João\n📅 Data: 09/11\n🕔 Horário: 17:00\n📍 Local: Barbearia do TICO")
+      "⏰ Olá, Diogo! Faltam 30 minutos para o seu atendimento!\n\n✂️ Serviço: Corte\n👤 Profissional: João\n📅 Data: 09/11\n🕔 Horário: 17:00\n📍 Local: Barbearia do TICO\n\n📲 Confirme sua presença:\n✅ Responda *SIM* para confirmar.\n❌ Responda *NÃO* se não puder comparecer.")
   })
 
   it("{falta} concorda com o número; {dia_semana} traz o dia por extenso", () => {

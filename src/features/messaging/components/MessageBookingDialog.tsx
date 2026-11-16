@@ -1,9 +1,9 @@
 import { useState } from "react"
 import { formatPhone } from "@/lib/br"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { cancelBooking, rescheduleBooking, setBookingStatus } from "@/features/booking/api"
-import { SlotPicker } from "@/features/booking/components/SlotPicker"
-import { bookingErrorMessage, formatDateTime, STATUS_LABEL, type BookingStatus, type Slot } from "@/features/booking/domain"
+import { cancelBooking, setBookingStatus } from "@/features/booking/api"
+import { RescheduleForm } from "@/features/booking/components/RescheduleDialog"
+import { bookingErrorMessage, canReschedule, formatDateTime, STATUS_LABEL, type BookingStatus } from "@/features/booking/domain"
 import { ProfessionalTag } from "@/features/catalog/components/ProfessionalPhoto"
 import { formatPrice } from "@/features/catalog/domain"
 import { confirmPayment, discardPayment, fetchPayments, registerPayment } from "@/features/finance/api"
@@ -51,7 +51,6 @@ export function MessageDetail({ message, booking, shopId, tz, onClose, variant =
   const queryClient = useQueryClient()
   const [panel, setPanel] = useState<Panel>(null)
   const [error, setError] = useState<string | null>(null)
-  const [slot, setSlot] = useState<Slot | null>(null)
 
   const payments = useQuery({ queryKey: ["booking-payments", booking.id], queryFn: () => fetchPayments([booking.id]) })
   const list = payments.data?.payments ?? []
@@ -62,6 +61,7 @@ export function MessageDetail({ message, booking, shopId, tz, onClose, variant =
   const aDeclarar = payments.data ? remainingToDeclare(booking.preco_centavos, list, refunds) : booking.preco_centavos
   const registrado = pago + aConfirmar // confirmado + a confirmar: trava cancelar
   const active = booking.status === "pendente" || booking.status === "confirmado"
+  const canMove = canReschedule(booking)
   const canPay = !payments.isError && (booking.status === "confirmado" || booking.status === "concluido") && (aDeclarar > 0 || aConfirmar > 0)
 
   const refresh = async () => {
@@ -90,11 +90,6 @@ export function MessageDetail({ message, booking, shopId, tz, onClose, variant =
   const discard = useMutation({
     mutationFn: (id: string) => discardPayment(id),
     onSuccess: async () => { setError(null); await refresh(); toast.success("Pagamento descartado.") },
-    onError: fail,
-  })
-  const move = useMutation({
-    mutationFn: () => rescheduleBooking(booking.id, slot!.slot_inicio, booking.professional_id),
-    onSuccess: async () => { setError(null); await refresh(); toast.success("Reserva reagendada."); onClose() },
     onError: fail,
   })
   const cancel = useMutation({
@@ -160,7 +155,7 @@ export function MessageDetail({ message, booking, shopId, tz, onClose, variant =
         {booking.status === "pendente" && (
           <Button className="h-11 md:h-10" disabled={accept.isPending} onClick={() => accept.mutate()}>{accept.isPending ? "Aceitando…" : "Aceitar"}</Button>
         )}
-        {active && booking.service_id && (
+        {canMove && (
           <Button variant="outline" className="h-11 md:h-10" aria-expanded={panel === "reagendar"} onClick={() => { setPanel(panel === "reagendar" ? null : "reagendar"); setError(null) }}>Reagendar</Button>
         )}
         {canPay && (
@@ -171,13 +166,16 @@ export function MessageDetail({ message, booking, shopId, tz, onClose, variant =
         )}
       </div>
 
-      {panel === "reagendar" && booking.service_id && (
+      {panel === "reagendar" && canMove && (
         <section aria-label="Reagendar" className="flex flex-col gap-3 rounded-card border border-border p-3">
           <h3 className="font-display text-lg font-semibold">Novo dia e horário</h3>
-          <SlotPicker shopId={shopId} tz={tz} serviceId={booking.service_id} professionalId={booking.professional_id} selected={slot?.slot_inicio ?? null} onSelect={setSlot} />
-          <Button className="h-11 md:h-10" disabled={!slot || move.isPending} onClick={() => move.mutate()}>
-            {move.isPending ? "Reagendando…" : slot ? `Confirmar ${formatDateTime(slot.slot_inicio, tz)}` : "Escolha um horário"}
-          </Button>
+          <RescheduleForm booking={booking} tz={tz} onDone={async () => {
+            await Promise.all([
+              queryClient.invalidateQueries({ queryKey: ["outbox", shopId] }),
+              queryClient.invalidateQueries({ queryKey: ["outbox-summary", shopId] }),
+            ])
+            onClose()
+          }} />
         </section>
       )}
 

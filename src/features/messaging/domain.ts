@@ -37,24 +37,29 @@ const OUTBOX_REASONS: Record<string, string> = {
   opt_out: "O cliente pediu para parar de receber novidades.",
   reserva_cancelada: "A reserva foi cancelada antes do envio.",
   reserva_vencida: "O atendimento começou antes do envio do lembrete.",
-  reserva_reagendada: "A reserva mudou de horário antes do envio do lembrete.",
+  reserva_reagendada: "A reserva foi reagendada antes do envio deste aviso.",
+  envio_incerto: "O envio da confirmação não pôde ser verificado. Confira a conversa no WhatsApp.",
   vinculo_removido: "O vínculo com o calendário foi removido.",
 }
 export const outboxReasonLabel = (reason: string | null): string => (reason ? OUTBOX_REASONS[reason] ?? reason : "")
 
 const INBOUND_REASONS: Record<string, string> = {
   sem_correlacao: "A mensagem não é resposta a um aviso enviado por nós.",
+  ambiguo: "O cliente tem mais de uma reserva futura: precisa responder citando o aviso.",
   telefone_divergente: "O número não é o da reserva.",
   desatualizado: "A reserva mudou depois do aviso respondido.",
   estado_final: "A reserva já estava concluída ou cancelada.",
   ja_confirmado: "A reserva já estava confirmada.",
   fora_da_janela: "Cancelamento fora do prazo permitido.",
+  ja_respondido: "O cliente já tinha respondido a este aviso.",
+  reagendar: "Cliente quer reagendar: recebeu o link para escolher o novo horário. A reserva continua até ele concluir.",
+  nao_reagendar: "Cliente não pode ir e não quer reagendar. A reserva continua: fale com ele ou cancele.",
   resposta_invalida: "Resposta diferente de SIM ou NÃO.",
   replay: "Mensagem antiga ou com horário inválido.",
   telefone_invalido: "Número inválido.",
   opt_out: "Cliente pediu para parar de receber novidades.",
-  sim: "Cliente confirmou.",
-  nao: "Cliente cancelou.",
+  sim: "Cliente confirmou a presença.",
+  nao: "Cliente avisou que não pode ir. A reserva continua: reagende ou cancele.",
 }
 export const inboundReasonLabel = (reason: string | null): string => (reason ? INBOUND_REASONS[reason] ?? reason : "")
 
@@ -89,10 +94,11 @@ export function matchesFilter(status: string, filter: StatusFilter): boolean {
 export const sendLabel = (status: string) =>
   ({ pendente: "Na fila", enviando: "Enviando", enviado: "Enviada", falhou: "Falhou", bloqueado: "Bloqueada", cancelado: "Cancelada" } as Record<string, string>)[status] ?? status
 
-/** Resposta do cliente a um aviso: SIM confirma, NÃO cancela; o resto foi ignorado ou rejeitado (com o motivo). */
-export function replyKind(motivo: string | null, status: string): "confirmou" | "cancelou" | "outra" {
-  if (status === "processado" && motivo === "sim") return "confirmou"
-  if (status === "processado" && motivo === "nao") return "cancelou"
+/** Resposta do cliente ao lembrete: SIM confirma a presença, NÃO avisa que não vai (não cancela); o resto foi ignorado ou rejeitado. */
+export function replyKind(motivo: string | null, status: string): "confirmou" | "nao_vai" | "outra" {
+  // a reserva já nasce confirmada: o SIM do cliente costuma cair em "ja_confirmado", e ainda assim é a confirmação dele
+  if ((status === "processado" && motivo === "sim") || motivo === "ja_confirmado") return "confirmou"
+  if (status === "processado" && (motivo === "nao" || motivo === "reagendar" || motivo === "nao_reagendar")) return "nao_vai"
   return "outra"
 }
 

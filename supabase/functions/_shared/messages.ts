@@ -4,6 +4,7 @@ export type EventPayload = {
   servico?: string
   profissional?: string
   inicio?: string
+  fim?: string
   fuso?: string
   barbearia?: string
   endereco?: string | null
@@ -26,7 +27,26 @@ function when(inicio: string, fuso: string): { dia: string; hora: string } {
   return { dia, hora }
 }
 
-const REPLY = "Responda SIM para confirmar ou NÃO para cancelar."
+/** Fim de todo lembrete: a resposta que o webhook entende. O NÃO não cancela: a barbearia oferece reagendar. */
+export const REMINDER_REPLY = "📲 Confirme sua presença:\n✅ Responda *SIM* para confirmar.\n❌ Responda *NÃO* se não puder comparecer."
+/** Acrescenta a instrução ao lembrete, a menos que o texto da barbearia já peça o SIM (texto antigo salvo sem ela). */
+export const withReminderReply = (texto: string) => (/\bSIM\b/.test(texto) ? texto : `${texto}\n\n${REMINDER_REPLY}`)
+
+/** Área do cliente na barbearia (login + Reagendar da própria reserva): `APP_URL` + slug. */
+export const rescheduleLink = (appUrl: string, slug: string, bookingId: string) =>
+  `${appUrl.replace(/\/+$/, "")}/${encodeURIComponent(slug)}/minhas-reservas?reagendar=${encodeURIComponent(bookingId)}`
+
+/**
+ * Resposta automática ao que process_whatsapp_reply acabou de registrar (motivo de inbound_webhook_events); null = não responder.
+ * 1ª resposta: sim | nao. 2ª, depois do NÃO: reagendar (SIM, precisa do link) | nao_reagendar (NÃO).
+ */
+export function replyAck(motivo: string | null | undefined, barbearia: string, link?: string | null): string | null {
+  if (motivo === "sim") return `Obrigado por confirmar, ${barbearia} agradece!`
+  if (motivo === "nao") return "Obrigado por responder! Gostaria de reagendar? Responda SIM ou NÃO."
+  if (motivo === "reagendar") return link ? `Perfeito! Escolha seu novo horário: ${link}` : null
+  if (motivo === "nao_reagendar") return "Tudo bem! A barbearia será avisada."
+  return null
+}
 
 /** Devolve o texto ao cliente, ou null quando o evento não é uma mensagem (ex.: eventos de calendário). */
 export function buildMessage(tipo: string, p: EventPayload): string | null {
@@ -38,15 +58,19 @@ export function buildMessage(tipo: string, p: EventPayload): string | null {
 
   switch (tipo) {
     case "reserva_criada":
-      return `${nome}Sua reserva em ${casa} está registrada.\n${detalhe}\n${REPLY}`
+      return `${nome}Sua reserva em ${casa} está registrada.\n${detalhe}\n\n${REMINDER_REPLY}`
     case "reserva_confirmada":
       return `${nome}Sua reserva em ${casa} está confirmada.\n${detalhe}`
-    case "reserva_reagendada":
-      return `${nome}Sua reserva em ${casa} foi reagendada.\n${detalhe}\n${REPLY}`
+    case "reserva_reagendada": {
+      if (!p.cliente || !p.servico || !p.inicio || !p.fim) return null
+      const duracao = leadTimeLabel((Date.parse(p.fim) - Date.parse(p.inicio)) / 60_000)
+      if (!duracao) return null
+      return `✅ ${p.cliente}, seu reagendamento foi confirmado para as ${hora}!\n\n✂️ ${p.servico} — ${duracao}.\n\n⚠️ *Atenção:* chegue pontualmente. Em caso de atraso, seu atendimento poderá ser cancelado conforme as regras da barbearia.`
+    }
     case "reserva_cancelada":
       return `${nome}Sua reserva em ${casa} foi cancelada.\n${detalhe}`
     case "lembrete_24h":
-      return `${nome}Lembrete: amanhã você tem horário em ${casa} (em 24h).\n${detalhe}\n${REPLY}`
+      return `${nome}Lembrete: amanhã você tem horário em ${casa} (em 24h).\n${detalhe}\n\n${REMINDER_REPLY}`
     case "lembrete_2h":
       return `${nome}Seu horário em ${casa} é daqui a 2 horas.\n${detalhe}`
     case "atendimento_concluido":
@@ -92,7 +116,7 @@ export type MessageVariable = (typeof MESSAGE_VARIABLES)[number]["chave"]
 /** Texto padrão (o mesmo que a migration 0019 grava como valor inicial de cada barbearia). */
 export const DEFAULT_TEMPLATES = {
   confirmacao: "✅ Olá, {nome}! Seu agendamento está confirmado.\n\n✂️ Serviço: {servico}\n👤 Profissional: {profissional}\n📅 Data: {data}\n🕔 Horário: {hora}\n📍 Local: {barbearia}",
-  lembrete: "⏰ Olá, {nome}! {falta} para o seu atendimento!\n\n✂️ Serviço: {servico}\n👤 Profissional: {profissional}\n📅 Data: {data}\n🕔 Horário: {hora}\n📍 Local: {barbearia}",
+  lembrete: "⏰ Olá, {nome}! {falta} para o seu atendimento!\n\n✂️ Serviço: {servico}\n👤 Profissional: {profissional}\n📅 Data: {data}\n🕔 Horário: {hora}\n📍 Local: {barbearia}\n\n" + REMINDER_REPLY,
   retorno: "👋 Olá, {nome}! Sentimos sua falta na {barbearia}.\n\n✂️ Último atendimento: {servico}\n👤 Profissional: {profissional}\n📅 Data: {data}\n\nJá faz {periodo}. Que tal agendar o próximo horário?\n\nSe não quiser mais receber estas mensagens, é só responder avisando.",
 } as const
 

@@ -116,7 +116,7 @@ describe("Central de mensagens: canal, indicadores, filtros e respostas", () => 
     expect(screen.queryByText("Maria Souza")).not.toBeInTheDocument()
   })
 
-  it("respostas: confirmação e cancelamento separadas, com o indicador na mensagem da reserva", async () => {
+  it("respostas: SIM e NÃO separados, com o indicador na mensagem da reserva", async () => {
     m.fetchInbound.mockResolvedValue([
       { id: "i1", status: "processado", motivo: "sim", recebido_em: "2099-01-01T12:00:00.000Z", booking_id: "b1" },
       { id: "i2", status: "processado", motivo: "nao", recebido_em: "2099-01-01T11:00:00.000Z", booking_id: null },
@@ -126,8 +126,8 @@ describe("Central de mensagens: canal, indicadores, filtros e respostas", () => 
     const lista = await screen.findByRole("list", { name: "Mensagens" })
     expect(within(lista).getAllByText("Confirmou").length).toBeGreaterThan(0) // a reserva b1 tem a resposta SIM
     const respostas = screen.getByRole("heading", { name: "Respostas recebidas" }).closest("section")!
-    expect(within(respostas).getByText("Cliente confirmou.")).toBeInTheDocument()
-    expect(within(respostas).getByText("Cliente cancelou.")).toBeInTheDocument()
+    expect(within(respostas).getByText("Cliente confirmou a presença.")).toBeInTheDocument()
+    expect(within(respostas).getByText("Cliente avisou que não pode ir. A reserva continua: reagende ou cancele.")).toBeInTheDocument()
     expect(within(respostas).getByText("Resposta diferente de SIM ou NÃO.")).toBeInTheDocument()
     expect(within(respostas).getAllByText("Aplicada")).toHaveLength(2)
     expect(within(respostas).getByText("Ignorada")).toBeInTheDocument()

@@ -17,9 +17,10 @@ import { Skeleton } from "@/ui/skeleton"
 import { toast } from "@/ui/sonner"
 import { ManualBookingDialog } from "../components/ManualBookingDialog"
 import { ReservationCard } from "../components/ReservationCard"
+import { RescheduleDialog } from "../components/RescheduleDialog"
 import { cancelBooking, createBlock, deleteBlock, fetchBlocks, fetchShopBookings, setBookingStatus } from "../api"
 import {
-  addDays, addMonths, bookingErrorMessage, formatDay, formatMonth, formatTime, isActive, isMissingSchema, localDate, monthGrid, parseRange,
+  addDays, addMonths, bookingErrorMessage, canReschedule, formatDay, formatMonth, formatTime, isActive, isMissingSchema, localDate, monthGrid, parseRange,
   STATUS_LABEL, todayIn, weekStart, zonedToUtc, type BookingRow, type BookingStatus,
 } from "../domain"
 
@@ -57,6 +58,7 @@ function DayAgenda({ shopId, tz, readOnly }: { shopId: string; tz: string; readO
   const [date, setDate] = useState(() => todayIn(tz))
   const [view, setView] = useState<View>("dia")
   const [canceling, setCanceling] = useState<BookingRow | null>(null)
+  const [moving, setMoving] = useState<BookingRow | null>(null)
   const [blocking, setBlocking] = useState(false)
   const [scheduling, setScheduling] = useState(false)
 
@@ -138,6 +140,7 @@ function DayAgenda({ shopId, tz, readOnly }: { shopId: string; tz: string; readO
                 <Button variant="outline" className="h-11 whitespace-nowrap md:h-10" disabled={status.isPending} onClick={() => status.mutate({ id: row.booking.id, to: "nao_compareceu" })}>Faltou</Button>
               </>
             )}
+            {!readOnly && canReschedule(row.booking) && <Button variant="outline" className="h-11 whitespace-nowrap md:h-10" onClick={() => setMoving(row.booking)}>Reagendar</Button>}
             {!readOnly && <Button variant="outline" className="h-11 whitespace-nowrap md:h-10" aria-label={`Cancelar reserva de ${row.booking.cliente_nome}`} onClick={() => setCanceling(row.booking)}>Cancelar</Button>}
           </>
         )}
@@ -214,6 +217,8 @@ function DayAgenda({ shopId, tz, readOnly }: { shopId: string; tz: string; readO
         description={canceling ? `${canceling.servico_nome} de ${canceling.cliente_nome}. O horário volta a ficar livre.` : ""}
         pending={cancel.isPending} onConfirm={() => canceling && cancel.mutate(canceling)} onClose={() => setCanceling(null)}
       />
+      {!readOnly && moving && <RescheduleDialog booking={moving} tz={tz} onDone={() => setMoving(null)}
+        photos={Object.fromEntries(professionals.map((p) => [p.id, p.avatar_path ?? null]))} />}
       {!readOnly && <BlockDialog open={blocking} shopId={shopId} tz={tz} date={date} professionals={professionals} onClose={() => setBlocking(false)} onDone={refresh} />}
       {!readOnly && <ManualBookingDialog open={scheduling} shopId={shopId} tz={tz} date={date} professionals={professionals} onClose={() => setScheduling(false)} onDone={refresh} />}
     </>

@@ -95,9 +95,9 @@ export function MessageRow({ message: m, tz, selected, reply, onSelect, onDelete
       <span className="flex shrink-0 flex-col items-end gap-1.5 pr-9">
         <StatusBadge variant={ui.tone}>{sendLabel(m.status)}</StatusBadge>
         {kind && (
-          <span className={cn("inline-flex items-center gap-1 text-xs font-medium", kind === "confirmou" ? "text-income" : kind === "cancelou" ? "text-danger" : "text-muted-foreground")}>
+          <span className={cn("inline-flex items-center gap-1 text-xs font-medium", kind === "confirmou" ? "text-income" : kind === "nao_vai" ? "text-danger" : "text-muted-foreground")}>
             <MessageSquareReply className="h-3.5 w-3.5" aria-hidden="true" />
-            {kind === "confirmou" ? "Confirmou" : kind === "cancelou" ? "Cancelou" : "Respondeu"}
+            {kind === "confirmou" ? "Confirmou" : kind === "nao_vai" ? "Não pode ir" : "Respondeu"}
           </span>
         )}
       </span>
@@ -121,7 +121,7 @@ export function MessageRow({ message: m, tz, selected, reply, onSelect, onDelete
   )
 }
 
-/** Respostas dos clientes, separadas por tipo: confirmou (SIM), cancelou (NÃO) e as demais (ignoradas ou rejeitadas, com o motivo). */
+/** Respostas dos clientes, separadas por tipo: confirmou (SIM), não pode ir (NÃO) e as demais (ignoradas ou rejeitadas, com o motivo). */
 export function ReplyList({ items, tz, active }: { items: InboundRow[]; tz: string; active: boolean }) {
   if (items.length === 0) {
     return (
@@ -138,8 +138,8 @@ export function ReplyList({ items, tz, active }: { items: InboundRow[]; tz: stri
     <ul className="divide-y divide-border">
       {items.map((i) => {
         const kind = replyKind(i.motivo, i.status)
-        const Icon = kind === "confirmou" ? Check : kind === "cancelou" ? X : CircleSlash
-        const tone: Tone = kind === "confirmou" ? "income" : kind === "cancelou" ? "danger" : "default"
+        const Icon = kind === "confirmou" ? Check : kind === "nao_vai" ? X : CircleSlash
+        const tone: Tone = kind === "confirmou" ? "income" : kind === "nao_vai" ? "danger" : "default"
         return (
           <li key={i.id} className="flex items-center gap-3 px-4 py-3">
             <span className={cn("flex h-9 w-9 shrink-0 items-center justify-center rounded-lg", TONE_BG[tone], TONE_TEXT[tone])}><Icon className="h-4 w-4" aria-hidden="true" /></span>

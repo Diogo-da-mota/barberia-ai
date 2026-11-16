@@ -9,7 +9,7 @@ import { PGlite } from "@electric-sql/pglite"
 import { btree_gist } from "@electric-sql/pglite/contrib/btree_gist"
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest"
 import { evoSendText } from "../functions/_shared/evolution-client"
-import { DEFAULT_TEMPLATES } from "../functions/_shared/messages"
+import { DEFAULT_TEMPLATES, REMINDER_REPLY, withReminderReply } from "../functions/_shared/messages"
 import { processarConfirmacoesELembretes, type Rpc } from "../functions/_shared/whatsapp-outbox"
 
 // A página pública reserva por createBooking (src/features/booking/api.ts); aqui o supabase.rpc dela cai na fila local.
@@ -186,7 +186,8 @@ describe("textos editáveis (0019): o worker envia o texto da barbearia", () => 
 
   it("cada barbearia começa com o texto padrão (igual ao do app)", async () => {
     const [b] = await sql("select msg_confirmacao, msg_lembrete from barbershops where id = $1", [loja.A.id])
-    expect(b).toEqual({ msg_confirmacao: DEFAULT_TEMPLATES.confirmacao, msg_lembrete: DEFAULT_TEMPLATES.lembrete })
+    // o banco guarda o lembrete sem o pedido de SIM/NÃO; o worker e o editor acrescentam o bloco (withReminderReply)
+    expect({ ...b, msg_lembrete: withReminderReply(b.msg_lembrete) }).toEqual({ msg_confirmacao: DEFAULT_TEMPLATES.confirmacao, msg_lembrete: DEFAULT_TEMPLATES.lembrete })
   })
 
   it("a diferença para o remoto troca o padrão antigo pelo formato com ícones e preserva texto personalizado", async () => {
@@ -195,8 +196,12 @@ describe("textos editáveis (0019): o worker envia o texto da barbearia", () => 
     await sql("update barbershops set msg_confirmacao = 'Meu texto {nome}', msg_lembrete = $2 where id = $1", [loja.B.id, ANTIGO.l])
     await db.exec(readFileSync("supabase/aplicar/diferenca-textos-icones.sql", "utf8"))
     await db.exec(readFileSync("supabase/aplicar/diferenca-textos-icones.sql", "utf8")) // reaplicar não muda nada
-    expect((await sql("select msg_confirmacao, msg_lembrete from barbershops where id = $1", [loja.A.id]))[0]).toEqual({ msg_confirmacao: DEFAULT_TEMPLATES.confirmacao, msg_lembrete: DEFAULT_TEMPLATES.lembrete })
-    expect((await sql("select msg_confirmacao, msg_lembrete from barbershops where id = $1", [loja.B.id]))[0]).toEqual({ msg_confirmacao: "Meu texto {nome}", msg_lembrete: DEFAULT_TEMPLATES.lembrete })
+    const textos = async (id: string) => {
+      const [t] = await sql("select msg_confirmacao, msg_lembrete from barbershops where id = $1", [id])
+      return { ...t, msg_lembrete: withReminderReply(t.msg_lembrete) }
+    }
+    expect(await textos(loja.A.id)).toEqual({ msg_confirmacao: DEFAULT_TEMPLATES.confirmacao, msg_lembrete: DEFAULT_TEMPLATES.lembrete })
+    expect(await textos(loja.B.id)).toEqual({ msg_confirmacao: "Meu texto {nome}", msg_lembrete: DEFAULT_TEMPLATES.lembrete })
     await sql("update barbershops set msg_confirmacao = $2, msg_lembrete = $3 where id = $1", [loja.B.id, DEFAULT_TEMPLATES.confirmacao, DEFAULT_TEMPLATES.lembrete])
   })
 
@@ -213,7 +218,7 @@ describe("textos editáveis (0019): o worker envia o texto da barbearia", () => 
     expect(envios).toHaveLength(2)
     const confirmacao = envios.find((e) => e.texto.startsWith("Oi Cliente!"))!
     expect(confirmacao.texto).toMatch(/^Oi Cliente! Confirmado: Corte com Ana, .+ às \d{2}:\d{2}\.$/) // sem endereço: a linha some
-    expect(envios.find((e) => e.texto.startsWith("Cliente, faltam"))?.texto).toBe("Cliente, faltam 30 minutos para o seu Corte na Barbearia A.")
+    expect(envios.find((e) => e.texto.startsWith("Cliente, faltam"))?.texto).toBe(`Cliente, faltam 30 minutos para o seu Corte na Barbearia A.\n\n${REMINDER_REPLY}`)
     await salvarTextos(ID.dono, DEFAULT_TEMPLATES.confirmacao, DEFAULT_TEMPLATES.lembrete)
   })
 })

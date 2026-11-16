@@ -207,7 +207,7 @@ describe("colisão de DDD e nono dígito", () => {
     const { retorno, evento: e } = await responder("553177776666", "wamid.nao", "NAO")
     expect(retorno).toBe("processado")
     expect(await inbound(e)).toMatchObject({ status: "processado", motivo: "nao" })
-    expect((await sql("select status from bookings where id = $1", [r]))[0].status).toBe("cancelado")
+    expect((await sql("select status from bookings where id = $1", [r]))[0].status).toBe("confirmado") // NÃO não cancela (0027)
   })
 
   it("regressão: resposta de um número de outro DDD não confirma a reserva", async () => {
@@ -396,7 +396,7 @@ describe("isolamento e permissões", () => {
   })
 
   it("funções do worker e do webhook seguem só para service_role, com search_path fixo", async () => {
-    for (const f of ["public.claim_outbox(integer)", "public.process_whatsapp_reply(text, timestamptz, text, text, text)"]) {
+    for (const f of ["public.claim_outbox(integer)", "public.process_whatsapp_reply(text, timestamptz, text, text, text, uuid)"]) {
       const [r] = await sql(`select has_function_privilege('anon', $1::regprocedure, 'execute') anon, has_function_privilege('authenticated', $1::regprocedure, 'execute') auth,
         has_function_privilege('service_role', $1::regprocedure, 'execute') svc,
         (select proconfig::text like '%search_path%' from pg_proc where oid = $1::regprocedure) caminho,

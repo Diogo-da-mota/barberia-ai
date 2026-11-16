@@ -9,7 +9,7 @@ import { SHOP_AUTH_VIEWS } from "@/lib/shopPaths"
 
 const m = vi.hoisted(() => ({
   fetchMyBarbershops: vi.fn(), getCurrentUser: vi.fn(), getSession: vi.fn(), onAuthStateChange: vi.fn(), signOut: vi.fn(),
-  getPublicShop: vi.fn(), getAvailability: vi.fn(), createBooking: vi.fn(), cancelBooking: vi.fn(), rescheduleBooking: vi.fn(),
+  getPublicShop: vi.fn(), getAvailability: vi.fn(), getSlotGrid: vi.fn(), createBooking: vi.fn(), cancelBooking: vi.fn(), rescheduleBooking: vi.fn(),
   setBookingStatus: vi.fn(), fetchMyBookings: vi.fn(), fetchShopBookings: vi.fn(), fetchBlocks: vi.fn(), createBlock: vi.fn(), deleteBlock: vi.fn(),
   fetchWorkingHours: vi.fn(), saveWorkingHours: vi.fn(), acceptInvite: vi.fn(), createInvite: vi.fn(), fetchInvites: vi.fn(), updateShopInfo: vi.fn(),
   fetchProfessionals: vi.fn(), fetchCustomerBookings: vi.fn(), fetchCustomerConsents: vi.fn(), fetchShopDetails: vi.fn(), fetchFiscal: vi.fn(),
@@ -24,7 +24,7 @@ vi.mock("@/features/catalog/api", () => ({ fetchProfessionals: m.fetchProfession
 // dados da barbearia (aba Dados de Mais): aqui, banco sem a migration 0012 (só nome, endereço em uma linha e telefone)
 vi.mock("@/features/settings/api", () => ({ fetchShopDetails: m.fetchShopDetails, fetchFiscal: m.fetchFiscal, saveShopProfile: vi.fn(), saveShopFiscal: vi.fn(), lookupCep: vi.fn() }))
 vi.mock("@/features/booking/api", () => ({
-  getPublicShop: m.getPublicShop, getAvailability: m.getAvailability, createBooking: m.createBooking, cancelBooking: m.cancelBooking,
+  getPublicShop: m.getPublicShop, getAvailability: m.getAvailability, getSlotGrid: m.getSlotGrid, createBooking: m.createBooking, cancelBooking: m.cancelBooking,
   rescheduleBooking: m.rescheduleBooking, setBookingStatus: m.setBookingStatus, fetchMyBookings: m.fetchMyBookings,
   fetchMyWhatsapp: async () => "11912345678", fillMyWhatsapp: async () => undefined,
   fetchShopBookings: m.fetchShopBookings, fetchBlocks: m.fetchBlocks, createBlock: m.createBlock, deleteBlock: m.deleteBlock,
@@ -36,6 +36,7 @@ import { AcceptInvite } from "@/features/booking/pages/AcceptInvite"
 import { Agenda } from "@/features/booking/pages/Agenda"
 import { Customers } from "@/features/booking/pages/Customers"
 import { WorkingHoursEditor, toIntervals } from "@/features/booking/components/WorkingHours"
+import { addDays, todayIn } from "@/features/booking/domain"
 import { More } from "@/features/booking/pages/More"
 import { MyBookings } from "@/features/booking/pages/MyBookings"
 import { ClientAccess, ClientBookings } from "@/features/booking/pages/ClientBookings"
@@ -85,6 +86,7 @@ beforeEach(() => {
   m.fetchMyBarbershops.mockResolvedValue({ status: "ok", barbershops: [SHOP] })
   m.getPublicShop.mockResolvedValue(PUBLIC)
   m.getAvailability.mockResolvedValue([SLOT])
+  m.getSlotGrid.mockResolvedValue([{ ...SLOT, livre: true }])
   m.createBooking.mockResolvedValue("novo")
   m.fetchMyBookings.mockResolvedValue([booking(), booking({ id: "b2", status: "cancelado", inicio: "2020-01-10T12:00:00.000Z", fim: "2020-01-10T12:40:00.000Z" })])
   m.fetchCustomerConsents.mockResolvedValue([])
@@ -109,7 +111,30 @@ describe("Página pública e agendamento", () => {
     fireEvent.click(screen.getByRole("button", { name: /Reservar Corte/ })) // abre o pop-up da reserva
     expect(await screen.findByRole("button", { name: "Qualquer profissional disponível" })).toBeInTheDocument()
     expect(screen.getByRole("button", { name: "Ana" })).toBeInTheDocument()
-    expect(m.getAvailability).toHaveBeenCalledWith("loja-1", "svc1", null, expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/))
+    expect(m.getSlotGrid).toHaveBeenCalledWith("loja-1", "svc1", expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/), null)
+  })
+
+  it("horário ocupado fica em vermelho, não reserva e sugere o profissional livre mantendo o horário", async () => {
+    const BRUNO = { ...SLOT, prof_id: "p2", prof_nome: "Bruno" }
+    m.getPublicShop.mockResolvedValue({ ...PUBLIC, professionals: [...PUBLIC.professionals, { id: "p2", nome: "Bruno", service_ids: ["svc1"] }] })
+    m.getSlotGrid.mockResolvedValue([{ ...SLOT, livre: false }, { ...BRUNO, livre: true }, { ...SLOT, slot_inicio: "2099-01-10T12:30:00.000Z", livre: true }])
+    open()
+    fireEvent.click(await screen.findByRole("button", { name: /Reservar Corte/ }))
+    fireEvent.click(await screen.findByRole("button", { name: "Ana" }))
+    fireEvent.click(await screen.findByRole("button", { name: "09:00, ocupado" }))
+
+    const popup = await screen.findByRole("dialog", { name: "Ana não está disponível às 09:00." })
+    expect(screen.queryByRole("heading", { name: "Seus dados" })).not.toBeInTheDocument() // ocupado nunca vira reserva
+    expect(within(popup).queryByRole("button", { name: "Ana" })).not.toBeInTheDocument() // só quem está livre
+
+    fireEvent.click(within(popup).getByRole("button", { name: "Bruno" }))
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: /não está disponível/ })).not.toBeInTheDocument())
+    expect(screen.getByRole("button", { name: "Bruno" })).toHaveAttribute("aria-pressed", "true")
+    expect(await screen.findByRole("button", { name: "09:00" })).toHaveAttribute("aria-pressed", "true") // horário mantido
+    type("Nome", "Maria Souza")
+    type("WhatsApp", "(64) 99275-0733")
+    fireEvent.click(await screen.findByRole("button", { name: "Confirmar reserva" }))
+    await waitFor(() => expect(m.createBooking).toHaveBeenCalledWith(expect.objectContaining({ professionalId: "p2", inicio: SLOT.slot_inicio })))
   })
 
   it("confirma a reserva com sessão e mostra o resumo", async () => {
@@ -170,7 +195,7 @@ describe("Página pública e agendamento", () => {
       return { subscription: { unsubscribe: vi.fn() } }
     })
     m.getSession.mockResolvedValue(null)
-    open()
+    const router = open()
     await chooseSlot()
     type("Nome", "Maria")
     type("WhatsApp", "(64) 99275-0733")
@@ -178,6 +203,7 @@ describe("Página pública e agendamento", () => {
     await screen.findByRole("dialog")
 
     await act(async () => { for (const cb of ouvintes) cb({ session }) }) // login concluído
+    await waitFor(() => expect(router.state.location.pathname).toBe("/barbearia-teste")) // a reserva fica na página, não vai para as reservas
     fireEvent.click(await screen.findByRole("button", { name: "Confirmar reserva" }))
     await waitFor(() => expect(m.createBooking).toHaveBeenCalledWith(expect.objectContaining({ inicio: SLOT.slot_inicio, nome: "Maria", whatsapp: "64992750733" })))
   })
@@ -270,13 +296,50 @@ describe("Minhas reservas", () => {
   })
 
   it("reagenda com o mesmo profissional", async () => {
+    const destino = "2099-01-10T13:00:00.000Z"
+    m.getSlotGrid.mockResolvedValue([{ ...SLOT, slot_inicio: destino, livre: true }])
     open()
     fireEvent.click(await screen.findByRole("button", { name: "Reagendar" }))
     const dialog = await screen.findByRole("dialog")
     expect(within(dialog).getByRole("button", { name: "Confirmar novo horário" })).toBeDisabled()
-    fireEvent.click(await within(dialog).findByRole("button", { name: "09:00" }))
+    fireEvent.click(await within(dialog).findByRole("button", { name: "10:00" }))
     fireEvent.click(within(dialog).getByRole("button", { name: "Confirmar novo horário" }))
-    await waitFor(() => expect(m.rescheduleBooking).toHaveBeenCalledWith("b1", SLOT.slot_inicio, "p1"))
+    await waitFor(() => expect(m.rescheduleBooking).toHaveBeenCalledWith("b1", destino, "p1", expect.any(String)))
+    expect(m.getSlotGrid).toHaveBeenCalledWith("loja-1", "svc1", "2099-01-10", "b1") // a própria reserva não conta como conflito
+  })
+
+  it("reagenda com outro profissional quando o horário está ocupado", async () => {
+    m.getSlotGrid.mockResolvedValue([{ ...SLOT, slot_inicio: "2099-01-10T13:00:00.000Z", livre: false }, { prof_id: "p2", prof_nome: "Bruno", slot_inicio: "2099-01-10T13:00:00.000Z", livre: true }])
+    open()
+    fireEvent.click(await screen.findByRole("button", { name: "Reagendar" }))
+    const dialog = await screen.findByRole("dialog")
+    fireEvent.click(await within(dialog).findByRole("button", { name: "10:00, ocupado" }))
+    fireEvent.click(within(await screen.findByRole("dialog", { name: "Ana não está disponível às 10:00." })).getByRole("button", { name: "Bruno" }))
+    fireEvent.click(within(dialog).getByRole("button", { name: "Confirmar com Bruno" }))
+    await waitFor(() => expect(m.rescheduleBooking).toHaveBeenCalledWith("b1", "2099-01-10T13:00:00.000Z", "p2", expect.any(String)))
+  })
+
+  it("permite trocar de profissional mantendo um horário livre e reutiliza a solicitação após falha", async () => {
+    const destino = "2099-01-10T13:00:00.000Z"
+    m.getSlotGrid.mockResolvedValue([
+      { ...SLOT, slot_inicio: destino, livre: true },
+      { prof_id: "p2", prof_nome: "Bruno", slot_inicio: destino, livre: true },
+    ])
+    m.rescheduleBooking.mockRejectedValueOnce(new Error("conexão perdida"))
+    open()
+    fireEvent.click(await screen.findByRole("button", { name: "Reagendar" }))
+    const dialog = await screen.findByRole("dialog")
+    fireEvent.click(await within(dialog).findByRole("button", { name: "10:00" }))
+    fireEvent.click(within(dialog).getByRole("button", { name: "Trocar profissional" }))
+    fireEvent.click(within(await screen.findByRole("dialog", { name: "Profissionais livres às 10:00" })).getByRole("button", { name: "Bruno" }))
+    const confirm = within(dialog).getByRole("button", { name: "Confirmar com Bruno" })
+    fireEvent.click(confirm)
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("Tente novamente")
+    expect(within(dialog).getByRole("button", { name: "10:00" })).toHaveAttribute("aria-pressed", "true")
+    fireEvent.click(confirm)
+    await waitFor(() => expect(m.rescheduleBooking).toHaveBeenCalledTimes(2))
+    expect(m.rescheduleBooking.mock.calls[0]).toEqual(["b1", destino, "p2", expect.any(String)])
+    expect(m.rescheduleBooking.mock.calls[1]).toEqual(m.rescheduleBooking.mock.calls[0])
   })
 
   it("mostra estado vazio sem reservas", async () => {
@@ -294,12 +357,30 @@ describe("Agenda da gestão", () => {
     m.fetchShopBookings.mockResolvedValue([today()])
     open()
     const row = (await screen.findByText("Corte")).closest("li")!
+    expect(within(row).queryByRole("button", { name: "Reagendar" })).not.toBeInTheDocument()
     expect(within(row).getByText(/Cliente Um/)).toBeInTheDocument()
     expect(within(row).getByRole("link", { name: /WhatsApp \+55 11 91234-5678/ })).toHaveAttribute("href", "https://wa.me/5511912345678")
     fireEvent.click(within(row).getByRole("button", { name: "Concluir" }))
     await waitFor(() => expect(m.setBookingStatus).toHaveBeenCalledWith("b9", "concluido"))
     fireEvent.click(within(row).getByRole("button", { name: "Faltou" }))
     await waitFor(() => expect(m.setBookingStatus).toHaveBeenCalledWith("b9", "nao_compareceu"))
+  })
+
+  it("a gestão reagenda a reserva da Agenda pelo mesmo seletor do cliente", async () => {
+    const dia = addDays(todayIn("America/Sao_Paulo"), 1)
+    const inicio = new Date(`${dia}T16:00:00-03:00`).toISOString()
+    const fim = new Date(`${dia}T16:40:00-03:00`).toISOString()
+    const destino = new Date(`${dia}T17:00:00-03:00`).toISOString()
+    m.fetchShopBookings.mockResolvedValue([booking({ inicio, fim })])
+    m.getSlotGrid.mockResolvedValue([{ ...SLOT, slot_inicio: destino, livre: true }])
+    open()
+    fireEvent.click(await screen.findByRole("button", { name: "Próximo (dia)" }))
+    fireEvent.click(await screen.findByRole("button", { name: "Reagendar" }))
+    const dialog = await screen.findByRole("dialog", { name: "Reagendar" })
+    fireEvent.click(await within(dialog).findByRole("button", { name: "17:00" }))
+    fireEvent.click(within(dialog).getByRole("button", { name: "Confirmar novo horário" }))
+    await waitFor(() => expect(m.rescheduleBooking).toHaveBeenCalledWith("b1", destino, "p1", expect.any(String)))
+    expect(m.createBooking).not.toHaveBeenCalled()
   })
 
   it("cancela com confirmação e navega entre os dias", async () => {
@@ -619,6 +700,15 @@ describe("Aceitar convite", () => {
 describe("Acesso do cliente (porta separada da gestão)", () => {
   const openClient = () => renderAt("/barbearia-teste/minhas-reservas", "/:slug/minhas-reservas", <ClientBookings />)
 
+  it("o link do WhatsApp abre a reserva indicada na conta do cliente", async () => {
+    m.fetchMyBookings.mockResolvedValue([booking(), booking({ id: "b2", servico_nome: "Corte de Barba" })])
+    renderAt("/barbearia-teste/minhas-reservas?reagendar=b2", "/:slug/minhas-reservas", <ClientBookings />)
+    const dialog = await screen.findByRole("dialog", { name: "Reagendar" })
+    expect(within(dialog).getByText(/Corte de Barba/)).toBeInTheDocument()
+    expect(m.getSlotGrid).toHaveBeenCalledWith("loja-1", "svc1", "2099-01-10", "b2")
+    expect(m.createBooking).not.toHaveBeenCalled()
+  })
+
   it("sem login mostra o acesso da barbearia (não a landing do sistema) e abre entrar/criar conta", async () => {
     m.getSession.mockResolvedValue(null)
     openClient()
@@ -721,6 +811,20 @@ describe("Acesso do cliente (porta separada da gestão)", () => {
     m.getSession.mockResolvedValue(null)
     renderAt("/barbearia-teste", "/:slug", <PublicShop />)
     expect(await screen.findByRole("button", { name: "Acesso" })).toBeInTheDocument()
+  })
+
+  it("entrando pelo botão Acesso, vai para /slug/minhas-reservas (não volta à página da barbearia)", async () => {
+    const ouvintes: ((e: { session: unknown }) => void)[] = []
+    m.onAuthStateChange.mockImplementation((cb: (e: { session: unknown }) => void) => {
+      ouvintes.push(cb)
+      return { subscription: { unsubscribe: vi.fn() } }
+    })
+    m.getSession.mockResolvedValue(null)
+    const router = renderAt("/barbearia-teste/servicos", "/:slug/:secao", <PublicShop />)
+    fireEvent.click(await screen.findByRole("button", { name: "Acesso" }))
+    await screen.findByRole("dialog")
+    await act(async () => { for (const cb of ouvintes) cb({ session }) }) // login concluído
+    await waitFor(() => expect(router.state.location.pathname).toBe("/barbearia-teste/minhas-reservas"))
   })
 
   it("/acesso é a porta neutra do cliente", async () => {

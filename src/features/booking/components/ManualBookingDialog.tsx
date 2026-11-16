@@ -93,7 +93,7 @@ export function ManualBookingDialog({ open, shopId, tz, date, professionals, onC
             <fieldset className="flex flex-col gap-2">
               <legend className="mb-1 text-sm font-medium">Dia e horário</legend>
               <SlotPicker shopId={shopId} tz={tz} serviceId={serviceId} professionalId={profId} initialDate={date}
-                selected={slot?.slot_inicio ?? null} onSelect={(s) => { setSlot(s); novaTentativa() }} />
+                selected={slot?.slot_inicio ?? null} onSelect={(s) => { if (s.prof_id !== profId) setProfId(s.prof_id); setSlot(s); novaTentativa() }} />
               {errors.horario && <p className="text-sm text-danger">{errors.horario}</p>}
             </fieldset>
           )}

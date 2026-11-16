@@ -9,8 +9,10 @@ import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
 import { createClient, type SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { handleCors, withCors } from '../_shared/cors.ts';
 import { loadEvolutionConfig, ConfigError } from '../_shared/evolution-config.ts';
-import { EVOLUTION_SECRET_HEADER } from '../_shared/evolution-client.ts';
+import { EVOLUTION_SECRET_HEADER, evoSendText } from '../_shared/evolution-client.ts';
+import { replyAck, rescheduleLink } from '../_shared/messages.ts';
 import { safeEqual } from '../_shared/webhook.ts';
+import { parseEvolutionMessage } from '../_shared/webhook.ts';
 
 serve(async (req: Request) => {
   // CORS preflight (útil para testes locais)
@@ -49,7 +51,8 @@ serve(async (req: Request) => {
       return withCors(new Response(JSON.stringify({ error: 'JSON inválido' }), { status: 400, headers: { 'Content-Type': 'application/json' } }));
     }
 
-    const event = (payload as { event?: string; instance?: string; data?: unknown })?.event;
+    // A Evolution v2 manda "messages.upsert"; aceita também "MESSAGES_UPSERT"
+    const event = (payload as { event?: string })?.event?.toUpperCase().replace(/\./g, '_');
     const instanceName = (payload as { instance?: string })?.instance;
     const data = (payload as { data?: unknown })?.data;
 
@@ -94,6 +97,19 @@ serve(async (req: Request) => {
         break;
       }
       case 'MESSAGES_UPSERT': {
+        // SIM registra a presença, NÃO registra (sem cancelar), PARAR bloqueia: regra, duplicidade e correlação em
+        // process_whatsapp_reply (0027). Mensagens da própria barbearia (fromMe) não chegam aqui: parseEvolutionMessage dá null.
+        const reply = parseEvolutionMessage(data);
+        if (reply) {
+          const { data: resultado, error } = await supabase.rpc('process_whatsapp_reply', {
+            p_event_id: reply.eventId, p_ts: reply.ts.toISOString(), p_from: reply.from,
+            p_context_message_id: reply.contextId, p_texto: reply.text, p_barbershop_id: barbershopId,
+          });
+          if (error) console.error('[webhook] process_whatsapp_reply falhou', error.code); // sem texto nem número nos logs
+          else console.log(`[webhook] resposta: ${resultado}`);
+          // só o evento que acabou de ser processado responde: reenvio da Evolution vira 'duplicado' e 2º SIM, 'ja_respondido'
+          if (resultado === 'processado') await acknowledge(supabase, config, instanceName, barbershopId, reply.eventId, reply.from);
+        }
         await handleMessagesUpsert(supabase, barbershopId, instanceName, data);
         break;
       }
@@ -121,6 +137,39 @@ serve(async (req: Request) => {
     return withCors(new Response(JSON.stringify({ error: 'Erro interno' }), { status: 500, headers: { 'Content-Type': 'application/json' } }));
   }
 });
+
+/**
+ * Responde pela mesma instância ao número que respondeu (já conferido com a reserva): agradece o SIM, pergunta sobre reagendar no NÃO,
+ * manda o link da área do cliente no 2º SIM e avisa que a barbearia saberá no 2º NÃO. Link = segredo APP_URL + slug da barbearia.
+ */
+async function acknowledge(
+  supabase: SupabaseClient,
+  config: ReturnType<typeof loadEvolutionConfig>,
+  instanceName: string,
+  barbershopId: string,
+  eventId: string,
+  from: string
+): Promise<void> {
+  try {
+    const { data: evento } = await supabase
+      .from('inbound_webhook_events')
+      .select('motivo, booking_id, barbershops(nome, slug)')
+      .eq('provider', 'whatsapp')
+      .eq('event_id', eventId)
+      .eq('barbershop_id', barbershopId)
+      .maybeSingle();
+    const loja = evento?.barbershops as { nome?: string; slug?: string } | null;
+    const appUrl = Deno.env.get('APP_URL') ?? '';
+    if (evento?.motivo === 'reagendar' && !appUrl) console.error('[webhook] APP_URL ausente: link de reagendamento não enviado');
+    const link = appUrl && loja?.slug && evento?.booking_id ? rescheduleLink(appUrl, loja.slug, evento.booking_id) : null;
+    const texto = loja?.nome ? replyAck(evento?.motivo, loja.nome, link) : null;
+    if (!texto) return;
+    await evoSendText(config, instanceName, { number: from, text: texto });
+    console.log(`[webhook] resposta automática: ${evento?.motivo}`);
+  } catch (err) {
+    console.error('[webhook] resposta automática falhou:', err instanceof Error ? err.message : 'erro');
+  }
+}
 
 /**
  * CONNECTION_UPDATE: estado da conexão mudou (conectou/desconectou).
@@ -272,7 +321,7 @@ async function handleMessagesUpsert(
       raw_payload: d,
     }, { onConflict: 'conversation_id,evolution_message_id' });
 
-  console.log(`[webhook] MESSAGES_UPSERT: ${fromMe ? 'outbound' : 'inbound'} ${normalizedNumber}`);
+  console.log(`[webhook] MESSAGES_UPSERT: ${fromMe ? 'outbound' : 'inbound'}`); // sem telefone nos logs (OPERACAO.md)
 }
 
 /**

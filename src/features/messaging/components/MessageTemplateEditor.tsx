@@ -1,6 +1,6 @@
 import { useRef, useState, type ReactNode } from "react"
 import { Clock, RotateCcw, Save } from "lucide-react"
-import { DEFAULT_TEMPLATES, MESSAGE_VARIABLES, VARIABLES_BY_TYPE, renderTemplate } from "../../../../supabase/functions/_shared/messages"
+import { DEFAULT_TEMPLATES, MESSAGE_VARIABLES, VARIABLES_BY_TYPE, renderTemplate, withReminderReply } from "../../../../supabase/functions/_shared/messages"
 import { Button } from "@/ui/button"
 
 const LIMITE = 1000
@@ -24,7 +24,9 @@ type Props = {
  * Editor do texto da mensagem: campo livre, botões que inserem as variáveis no cursor e a prévia montada
  * pela mesma função que o worker usa no envio (renderTemplate). O que aparece aqui é o que o cliente recebe.
  */
-export function MessageTemplateEditor({ tipo, salvo, exemplo, icon, titulo, meta, podeSalvar, salvando, onSalvar }: Props) {
+export function MessageTemplateEditor({ tipo, salvo: gravado, exemplo, icon, titulo, meta, podeSalvar, salvando, onSalvar }: Props) {
+  // lembrete salvo sem o pedido de SIM/NÃO: o worker acrescenta o bloco no envio, então o campo já mostra o texto completo
+  const salvo = tipo === "lembrete" ? withReminderReply(gravado) : gravado
   const [texto, setTexto] = useState(salvo)
   const [base, setBase] = useState(salvo)
   // o texto salvo mudou (outra aba, salvamento): acompanha, a menos que haja edição em andamento
@@ -35,8 +37,10 @@ export function MessageTemplateEditor({ tipo, salvo, exemplo, icon, titulo, meta
   const campo = useRef<HTMLTextAreaElement>(null)
   const id = `texto-${tipo}`
   const variaveis = MESSAGE_VARIABLES.filter((v) => VARIABLES_BY_TYPE[tipo].includes(v.chave))
-  const mudou = texto.trim() !== salvo.trim()
+  // compara com o texto do banco: lembrete antigo sem SIM/NÃO pode ser salvo completo como aparece no campo
+  const mudou = texto.trim() !== gravado.trim()
   const invalido = texto.trim().length === 0 || texto.length > LIMITE
+  // a prévia é só o campo com as variáveis trocadas: o que se vê é o que se salva e o que sai (nada acrescentado aqui)
   const previa = renderTemplate(texto, exemplo)
 
   const inserir = (chave: string) => {

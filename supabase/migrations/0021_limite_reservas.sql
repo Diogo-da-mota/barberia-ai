@@ -176,20 +176,23 @@ begin
       and private.br_phone_key(o.destino) = private.br_phone_key(b.cliente_whatsapp)
   ) >= 8;
 
-  if v_tipo = 'reserva_cancelada' then
+  if v_tipo in ('reserva_cancelada', 'reserva_reagendada') then
     update public.outbox_events
-    set status = 'cancelado', ultimo_erro = 'reserva_cancelada', atualizado_em = now()
+    set status = 'cancelado', ultimo_erro = v_tipo, atualizado_em = now()
     where booking_id = b.id and status in ('pendente', 'bloqueado')
-      and (tipo like 'lembrete%' or tipo in ('reserva_criada', 'reserva_confirmada', 'reserva_reagendada', 'calendar_upsert'));
+      and (v_tipo = 'reserva_cancelada' or canal = 'whatsapp')
+      and (tipo like 'lembrete%' or tipo in ('reserva_criada', 'reserva_confirmada', 'reserva_reagendada')
+        or (v_tipo = 'reserva_cancelada' and tipo = 'calendar_upsert'));
   end if;
 
   if v_tipo <> 'reserva_confirmada' then
-    insert into public.outbox_events (barbershop_id, booking_id, customer_id, tipo, destino, payload, dedup_key, status, ultimo_erro)
+    insert into public.outbox_events (barbershop_id, booking_id, customer_id, tipo, destino, payload, dedup_key, status, ultimo_erro, max_tentativas)
     values (
       b.barbershop_id, b.id, b.customer_id, v_tipo, b.cliente_whatsapp, v_payload,
       b.id || ':' || v_tipo || ':' || new.id,
       case when v_limite then 'cancelado' when v_consent then 'pendente' else 'cancelado' end,
-      case when v_limite then 'limite_telefone' when v_consent then null else 'sem_consentimento' end
+      case when v_limite then 'limite_telefone' when v_consent then null else 'sem_consentimento' end,
+      case when v_tipo = 'reserva_reagendada' then 1 else 5 end
     )
     on conflict (dedup_key) do nothing;
   end if;

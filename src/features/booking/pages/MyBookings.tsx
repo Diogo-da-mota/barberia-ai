@@ -7,7 +7,7 @@ import { Skeleton } from "@/ui/skeleton"
 import { useReservations } from "../hooks/useReservations"
 import { CompleteWhatsApp } from "../components/CompleteWhatsApp"
 import { ReservationCard } from "../components/ReservationCard"
-import { formatDateTime, isMissingSchema, STATUS_LABEL, type BookingRow, type BookingStatus } from "../domain"
+import { canReschedule, formatDateTime, isMissingSchema, STATUS_LABEL, type BookingRow, type BookingStatus } from "../domain"
 import { shopPath } from "@/lib/shopPaths"
 
 const BADGE: Record<BookingStatus, "income" | "warning" | "danger" | "default"> = {
@@ -33,7 +33,7 @@ export function MyBookingsView({ slug }: { slug?: string }) {
       professional={b.professionals ?? { nome: b.servico_nome }}
       actions={actions && (
         <>
-          <Button variant="outline" className="h-11 whitespace-nowrap md:h-10" onClick={() => askMove(b)}>Reagendar</Button>
+          {canReschedule(b) && <Button variant="outline" className="h-11 whitespace-nowrap md:h-10" onClick={() => askMove(b)}>Reagendar</Button>}
           <Button variant="outline" className="h-11 whitespace-nowrap md:h-10" onClick={() => askCancel(b)}>Cancelar reserva</Button>
         </>
       )}

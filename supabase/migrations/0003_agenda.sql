@@ -171,6 +171,61 @@ as $$
   ) s
 $$;
 
+-- Grade do dia (público): todo horário da jornada de cada profissional do serviço, livre ou ocupado.
+--   Mesma regra de private.slots (jornada, passos de 15 min, duração inteira do serviço, sobreposição parcial com
+--   reservas e bloqueios, nada no passado). Só leitura: quem grava (create_booking, reschedule_booking) revalida.
+--   p_booking_id (reagendamento): a ocupação da própria reserva não conta, só para o dono da reserva ou a gestão.
+create or replace function public.get_slot_grid(p_barbershop_id uuid, p_service_id uuid, p_data date, p_booking_id uuid default null)
+returns table (prof_id uuid, prof_nome text, slot_inicio timestamptz, livre boolean)
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+declare
+  v_tz text;
+  v_dur integer;
+  v_propria uuid;
+begin
+  select b.fuso into v_tz from public.barbershops b where b.id = p_barbershop_id and b.status = 'ativo';
+  if p_booking_id is not null then
+    select bk.duracao_min, bk.occupancy_id into v_dur, v_propria from public.bookings bk
+    where bk.id = p_booking_id and bk.barbershop_id = p_barbershop_id and bk.service_id = p_service_id
+      and bk.status in ('pendente', 'confirmado') and bk.inicio > now()
+      and (bk.customer_id = auth.uid() or private.has_role(p_barbershop_id, array['proprietario', 'gerente']));
+  end if;
+  if v_dur is null then
+    select sv.duracao_min into v_dur from public.services sv where sv.id = p_service_id and sv.barbershop_id = p_barbershop_id and sv.ativo;
+  end if;
+  if v_tz is null or v_dur is null or p_data is null
+     or p_data < (now() at time zone v_tz)::date or p_data > (now() at time zone v_tz)::date + 60 then
+    return;
+  end if;
+  return query
+  select pr.id, pr.nome, gs, not exists (
+      select 1 from public.occupancies o
+      where o.professional_id = pr.id and o.id is distinct from v_propria
+        and o.periodo && tstzrange(gs, gs + make_interval(mins => v_dur), '[)')
+    )
+  from public.professionals pr
+  join public.professional_services ps on ps.professional_id = pr.id and ps.service_id = p_service_id
+  join public.working_hours wh on wh.professional_id = pr.id and wh.dow = extract(dow from p_data)::int
+  cross join lateral generate_series(
+    (p_data::timestamp + make_interval(mins => wh.inicio_min)) at time zone v_tz,
+    (p_data::timestamp + make_interval(mins => wh.fim_min - v_dur)) at time zone v_tz,
+    interval '15 minutes'
+  ) gs
+  where pr.barbershop_id = p_barbershop_id
+    and pr.ativo
+    and wh.fim_min - wh.inicio_min >= v_dur
+    and gs >= now()
+  order by gs, pr.nome;
+end;
+$$;
+
+revoke all on function public.get_slot_grid(uuid, uuid, date, uuid) from public, anon;
+grant execute on function public.get_slot_grid(uuid, uuid, date, uuid) to anon, authenticated;
+
 -- Dados publicáveis da barbearia para a página pública (sem tabelas expostas ao visitante)
 create function public.get_public_shop(p_slug text)
 returns jsonb
@@ -405,7 +460,7 @@ end;
 $$;
 
 -- Troca o horário em uma única transação: se o novo horário estiver ocupado, a reserva antiga permanece
-create function public.reschedule_booking(p_booking_id uuid, p_novo_inicio timestamptz, p_professional_id uuid)
+create or replace function public.reschedule_booking(p_booking_id uuid, p_novo_inicio timestamptz, p_professional_id uuid, p_request_id uuid)
 returns void
 language plpgsql
 security definer
@@ -415,7 +470,6 @@ declare
   v_user uuid := auth.uid();
   b public.bookings%rowtype;
   v_manager boolean;
-  v_window integer;
   v_tz text;
   v_cand record;
   v_occ uuid;
@@ -427,16 +481,25 @@ begin
     raise exception 'not_found' using errcode = 'P0002';
   end if;
   v_manager := private.has_role(b.barbershop_id, array['proprietario', 'gerente']);
-  if v_user is null or not (v_manager or b.customer_id = v_user) then
+  if v_user is null or (not v_manager and b.customer_id is distinct from v_user) then
     raise exception 'forbidden' using errcode = '42501';
+  end if;
+  if p_request_id is not null and exists (
+    select 1 from public.booking_events e where e.booking_id = b.id and e.tipo = 'rescheduled'
+      and e.actor_id = v_user and e.detalhes ->> 'request_id' = p_request_id::text
+  ) then
+    return;
   end if;
   if b.status not in ('pendente', 'confirmado') or b.service_id is null then
     raise exception 'invalid_status' using errcode = 'P0001';
   end if;
-  select cancel_window_min, fuso into v_window, v_tz from public.barbershops where id = b.barbershop_id;
-  if not v_manager and b.inicio - now() < make_interval(mins => v_window) then
-    raise exception 'cancel_window' using errcode = 'P0001';
+  if b.inicio <= clock_timestamp() then
+    raise exception 'booking_started' using errcode = 'P0001';
   end if;
+  if p_novo_inicio = b.inicio and coalesce(p_professional_id, b.professional_id) = b.professional_id then
+    return;
+  end if;
+  select fuso into v_tz from public.barbershops where id = b.barbershop_id;
 
   delete from public.occupancies where id = b.occupancy_id;
 
@@ -458,14 +521,31 @@ begin
     end;
   end loop;
 
-  if v_prof is null then
+  if v_prof is null or p_novo_inicio <= clock_timestamp() then
     raise exception 'slot_taken' using errcode = '23P01';
+  end if;
+  if b.inicio <= clock_timestamp() then
+    raise exception 'booking_started' using errcode = 'P0001';
   end if;
 
   update public.bookings set professional_id = v_prof, inicio = p_novo_inicio, fim = v_fim, occupancy_id = v_occ where id = b.id;
   insert into public.booking_events (booking_id, barbershop_id, actor_id, tipo, detalhes)
-  values (b.id, b.barbershop_id, v_user, 'rescheduled', jsonb_build_object('de', b.inicio, 'para', p_novo_inicio));
+  values (b.id, b.barbershop_id, v_user, 'rescheduled', jsonb_build_object(
+    'de', b.inicio, 'para', p_novo_inicio, 'profissional_de', b.professional_id, 'profissional_para', v_prof, 'request_id', p_request_id
+  ));
 end;
+$$;
+
+revoke all on function public.reschedule_booking(uuid, timestamptz, uuid, uuid) from public, anon, authenticated;
+grant execute on function public.reschedule_booking(uuid, timestamptz, uuid, uuid) to authenticated;
+
+-- A chamada de três argumentos continua disponível para clientes existentes.
+create or replace function public.reschedule_booking(p_booking_id uuid, p_novo_inicio timestamptz, p_professional_id uuid)
+returns void
+language sql
+set search_path = ''
+as $$
+  select public.reschedule_booking(p_booking_id, p_novo_inicio, p_professional_id, null)
 $$;
 
 -- Confirmar, concluir ou marcar falta (somente gestão). Cancelar usa cancel_booking.

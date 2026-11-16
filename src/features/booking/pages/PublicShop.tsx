@@ -80,6 +80,8 @@ export function PublicShop() {
   const [serviceId, setServiceId] = useState<string | null>(null)
   const [professionalId, setProfessionalId] = useState("any")
   const [slot, setSlot] = useState<Slot | null>(null)
+  // Último horário tocado e quem está livre nele: trocar para um desses profissionais mantém dia e horário; `pulso` = horário ocupado
+  const [desejado, setDesejado] = useState<{ livres: Slot[]; pulso: number | null } | null>(null)
   const [nome, setNome] = useState(String(session?.user.user_metadata?.full_name ?? ""))
   const [whatsapp, setWhatsapp] = useState("")
   const [lembretes, setLembretes] = useState(false)
@@ -88,10 +90,14 @@ export function PublicShop() {
   // Porta do cliente: /slug/entrar, /slug/criar-conta e /slug/recuperar abrem o acesso por cima da página da barbearia.
   const navigate = useNavigate()
   const authView = toAuthView(location.pathname.split("/")[2] ?? null)
-  const fromState = (location.state as { from?: unknown } | null)?.from
+  const authState = location.state as { from?: unknown; reserva?: unknown } | null
+  const fromState = authState?.from
   const from = typeof fromState === "string" && fromState.startsWith(shopPath(slug)) && !toAuthView(fromState.split("/")[2] ?? null) ? fromState : null
-  const openAuth = (target: AuthView) =>
-    navigate(shopAuthPath(slug, target), authView ? { replace: true, state: location.state } : { state: { from: location.pathname } })
+  // Depois de entrar: a reserva volta à página para reabrir; o botão Acesso (ou link direto) vai para as reservas desta barbearia.
+  const reservationsPath = shopBookingsPath(slug)
+  const afterLogin = from && (authState?.reserva === true || from.split("?", 1)[0] === reservationsPath) ? from : reservationsPath
+  const openAuth = (target: AuthView, reserva = false) =>
+    navigate(shopAuthPath(slug, target), authView ? { replace: true, state: location.state } : { state: { from: location.pathname, reserva } })
   const closeAuth = () => navigate(from ?? shopPath(slug), { replace: true })
   const [bookingOpen, setBookingOpen] = useState(false)
   const key = useRef(crypto.randomUUID())
@@ -122,10 +128,10 @@ export function PublicShop() {
     setBookingOpen(true)
   }, [session])
 
-  // Entrou pela porta do cliente: volta para onde estava ou, sem origem, para as reservas desta barbearia.
+  // Entrou pela porta do cliente: vai para as reservas desta barbearia (ou volta à reserva que pediu o login).
   useEffect(() => {
-    if (session && authView) navigate(from ?? shopBookingsPath(slug), { replace: true })
-  }, [session, authView, from, slug, navigate])
+    if (session && authView) navigate(afterLogin, { replace: true })
+  }, [session, authView, afterLogin, navigate])
 
   // Cliente com conta: nome e WhatsApp já vêm preenchidos (da última reserva; o nome, também da conta) e podem ser
   // editados. Só preenche campo vazio: nunca troca o que a pessoa digitou ou o que voltou do rascunho.
@@ -160,7 +166,7 @@ export function PublicShop() {
     document.getElementById(sectionId)?.scrollIntoView()
   }, [data, sectionId])
   const [detailId, setDetailId] = useState<string | null>(null)
-  const reserve = (id: string) => { setDetailId(null); setServiceId(id); setProfessionalId("any"); setSlot(null); key.current = crypto.randomUUID(); setBookingOpen(true) }
+  const reserve = (id: string) => { setDetailId(null); setServiceId(id); setProfessionalId("any"); setSlot(null); setDesejado(null); key.current = crypto.randomUUID(); setBookingOpen(true) }
   const detail = data?.services.find((item) => item.id === detailId) ?? null
   const service = data?.services.find((item) => item.id === serviceId) ?? null
   const professionals = data && service ? data.professionals.filter((p) => p.service_ids.includes(service.id)) : []
@@ -191,7 +197,7 @@ export function PublicShop() {
       saveDraft({ slug, serviceId, professionalId, slot, nome, whatsapp, lembretes, marketing })
       awaitingLogin.current = true
       setBookingOpen(false) // um pop-up por vez: o login abre sozinho; ao entrar, a reserva reabre com os dados
-      openAuth("entrar")
+      openAuth("entrar", true)
       return
     }
     book.mutate()
@@ -234,7 +240,13 @@ export function PublicShop() {
                       <ProfessionalChoice
                         items={[{ id: "any", nome: "Qualquer profissional disponível", avatarPath: null }, ...professionals.map((p) => ({ id: p.id, nome: p.nome, avatarPath: p.avatar_path ?? null }))]}
                         selected={professionalId}
-                        onSelect={(id) => { setProfessionalId(id); setSlot(null); key.current = crypto.randomUUID() }}
+                        highlight={desejado?.pulso ? { ids: desejado.livres.map((s) => s.prof_id), nonce: desejado.pulso } : null}
+                        onSelect={(id) => {
+                          // livre no horário desejado: mantém dia e horário; senão, escolhe de novo
+                          setSlot(desejado?.livres.find((s) => id === "any" || s.prof_id === id) ?? null)
+                          setDesejado((d) => d && { ...d, pulso: null })
+                          setProfessionalId(id); key.current = crypto.randomUUID()
+                        }}
                       />
                     )}
                   </Step>
@@ -247,7 +259,13 @@ export function PublicShop() {
                       professionalId={professionalId === "any" ? null : professionalId}
                       selected={slot?.slot_inicio ?? null}
                       initialDate={slot ? dayOf(slot.slot_inicio, data.fuso) : undefined}
-                      onSelect={(next) => { setSlot(next); key.current = crypto.randomUUID() }}
+                      onSelect={(next) => {
+                        // alternativa a um horário ocupado: a reserva passa para o profissional livre
+                        if (professionalId !== "any" && next.prof_id !== professionalId) setProfessionalId(next.prof_id)
+                        setSlot(next); setDesejado((d) => d && { ...d, pulso: null }); key.current = crypto.randomUUID()
+                      }}
+                      onPick={(t) => setDesejado({ livres: t.livres, pulso: t.livre || t.livres.length === 0 ? null : Date.now() })}
+                      photos={Object.fromEntries(professionals.map((p) => [p.id, p.avatar_path ?? null]))}
                     />
                   </Step>
                 )}
@@ -258,23 +276,30 @@ export function PublicShop() {
                     <p className="text-sm text-muted-foreground">
                       {service.nome}, {formatDateTime(slot.slot_inicio, data.fuso)}
                     </p>
-                    <Field label="Nome" htmlFor="b-nome" error={errors.nome} errorId="b-nome-erro">
-                      <Input id="b-nome" value={nome} autoComplete="name" aria-invalid={errors.nome ? true : undefined} aria-describedby={errors.nome ? "b-nome-erro" : undefined} className="h-11 text-base md:h-10 md:text-sm" onChange={(e) => setNome(e.target.value)} />
-                    </Field>
-                    <Field label="WhatsApp" htmlFor="b-whats" error={errors.whatsapp} errorId="b-whats-erro">
-                      <PhoneInput key={phoneVersion} id="b-whats" defaultValue={whatsapp} onValueChange={setWhatsapp} aria-invalid={errors.whatsapp ? true : undefined} aria-describedby={errors.whatsapp ? "b-whats-erro" : undefined} />
-                    </Field>
-                    <label className="flex min-h-11 items-center gap-3 text-sm">
-                      <input type="checkbox" checked={lembretes} onChange={(e) => setLembretes(e.target.checked)} className="h-5 w-5 shrink-0 accent-primary" />
-                      Quero receber avisos e lembretes desta reserva
-                    </label>
-                    <label className="flex min-h-11 items-center gap-3 text-sm">
-                      <input type="checkbox" checked={marketing} onChange={(e) => setMarketing(e.target.checked)} className="h-5 w-5 shrink-0 accent-primary" />
-                      Aceito receber novidades e promoções da barbearia
-                    </label>
-                    <Button type="submit" className="h-12 w-full text-base" disabled={book.isPending || loading}>
-                      {book.isPending ? "Confirmando…" : session ? "Confirmar reserva" : "Entrar para confirmar"}
-                    </Button>
+                    {/* Nome e WhatsApp lado a lado; consentimentos à esquerda e Confirmar à direita (no celular, tudo empilhado) */}
+                    <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_13rem] sm:items-start">
+                      <Field label="Nome" htmlFor="b-nome" error={errors.nome} errorId="b-nome-erro">
+                        <Input id="b-nome" value={nome} autoComplete="name" aria-invalid={errors.nome ? true : undefined} aria-describedby={errors.nome ? "b-nome-erro" : undefined} className="h-11 text-base md:h-10 md:text-sm" onChange={(e) => setNome(e.target.value)} />
+                      </Field>
+                      <Field label="WhatsApp" htmlFor="b-whats" error={errors.whatsapp} errorId="b-whats-erro">
+                        <PhoneInput key={phoneVersion} id="b-whats" defaultValue={whatsapp} onValueChange={setWhatsapp} aria-invalid={errors.whatsapp ? true : undefined} aria-describedby={errors.whatsapp ? "b-whats-erro" : undefined} />
+                      </Field>
+                    </div>
+                    <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_13rem] sm:items-center">
+                      <div className="flex flex-col">
+                        <label className="flex min-h-11 items-center gap-3 text-sm">
+                          <input type="checkbox" checked={lembretes} onChange={(e) => setLembretes(e.target.checked)} className="h-5 w-5 shrink-0 accent-primary" />
+                          Quero receber avisos e lembretes desta reserva
+                        </label>
+                        <label className="flex min-h-11 items-center gap-3 text-sm">
+                          <input type="checkbox" checked={marketing} onChange={(e) => setMarketing(e.target.checked)} className="h-5 w-5 shrink-0 accent-primary" />
+                          Aceito receber novidades e promoções da barbearia
+                        </label>
+                      </div>
+                      <Button type="submit" className="h-12 w-full text-base" disabled={book.isPending || loading}>
+                        {book.isPending ? "Confirmando…" : session ? "Confirmar reserva" : "Entrar para confirmar"}
+                      </Button>
+                    </div>
                   </Step>
                 )}
               </form>
@@ -318,7 +343,7 @@ export function PublicShop() {
       <AuthDialog
         open={Boolean(authView) && !loading && !session}
         view={authView}
-        next={from ?? shopBookingsPath(slug)}
+        next={afterLogin}
         notice={CALLBACK_NOTICES[new URLSearchParams(location.search).get("erro") as CallbackError] ?? null}
         onViewChange={openAuth}
         onClose={closeAuth}

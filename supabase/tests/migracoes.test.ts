@@ -31,9 +31,9 @@ afterAll(async () => {
 })
 
 describe("migrations em sequência", () => {
-  it("as 22 migrations existem, numeradas sem lacunas, e aplicam sem erro", async () => {
+  it("a sequência de migrations publicada existe e aplica sem erro", async () => {
     const files = readdirSync("supabase/migrations").filter((f) => f.endsWith(".sql")).sort()
-    expect(files.map((f) => f.slice(0, 4))).toEqual(["0001", "0002", "0003", "0004", "0005", "0006", "0007", "0008", "0009", "0010", "0011", "0012", "0013", "0014", "0015", "0016", "0017", "0018", "0019", "0020", "0021", "0022"])
+    expect(files.map((f) => f.slice(0, 4))).toEqual(["0001", "0002", "0003", "0004", "0005", "0006", "0007", "0008", "0009", "0010", "0011", "0012", "0013", "0014", "0015", "0016", "0017", "0018", "0019", "0020", "0021", "0022", "0026", "0027", "0028"])
   })
 
   it("supabase/aplicar/0005-0009.sql contém exatamente as migrations 0005 a 0009 (sem deriva)", () => {
@@ -44,15 +44,21 @@ describe("migrations em sequência", () => {
     expect(aplicar).toMatch(/^[\s\S]*\nbegin;[\s\S]*commit;\s*$/)
   })
 
-  it("supabase/aplicar/0017.sql contém exatamente a migration 0017 (sem deriva), em uma transação", () => {
-    const aplicar = readFileSync("supabase/aplicar/0017.sql", "utf8")
-    expect(aplicar).toContain(readFileSync("supabase/migrations/0017_reminder_config.sql", "utf8").trim())
+  it("supabase/aplicar/0026.sql contém exatamente a migration 0026 (sem deriva), em uma transação", () => {
+    const aplicar = readFileSync("supabase/aplicar/0026.sql", "utf8")
+    expect(aplicar).toContain(readFileSync("supabase/migrations/0026_resposta_whatsapp.sql", "utf8").trim())
     expect(aplicar).toMatch(/^[\s\S]*\nbegin;[\s\S]*commit;\s*$/)
   })
 
-  it("supabase/aplicar/0018.sql contém exatamente a migration 0018 (sem deriva), em uma transação", () => {
-    const aplicar = readFileSync("supabase/aplicar/0018.sql", "utf8")
-    expect(aplicar).toContain(readFileSync("supabase/migrations/0018_fila_whatsapp.sql", "utf8").trim())
+  it("supabase/aplicar/0027.sql contém exatamente a migration 0027 (sem deriva), em uma transação", () => {
+    const aplicar = readFileSync("supabase/aplicar/0027.sql", "utf8")
+    expect(aplicar).toContain(readFileSync("supabase/migrations/0027_presenca_whatsapp.sql", "utf8").trim())
+    expect(aplicar).toMatch(/^[\s\S]*\nbegin;[\s\S]*commit;\s*$/)
+  })
+
+  it("supabase/aplicar/0017.sql contém exatamente a migration 0017 (sem deriva), em uma transação", () => {
+    const aplicar = readFileSync("supabase/aplicar/0017.sql", "utf8")
+    expect(aplicar).toContain(readFileSync("supabase/migrations/0017_reminder_config.sql", "utf8").trim())
     expect(aplicar).toMatch(/^[\s\S]*\nbegin;[\s\S]*commit;\s*$/)
   })
 
@@ -62,16 +68,17 @@ describe("migrations em sequência", () => {
     expect(aplicar).toMatch(/^[\s\S]*\nbegin;[\s\S]*commit;\s*$/)
   })
 
-  it("supabase/aplicar/0020.sql contém exatamente a migration 0020 (sem deriva), em uma transação", () => {
-    const aplicar = readFileSync("supabase/aplicar/0020.sql", "utf8")
-    expect(aplicar).toContain(readFileSync("supabase/migrations/0020_retorno_cliente.sql", "utf8").trim())
+  it("a diferença de reagendamento contém as funções atualizadas e pode ser reaplicada", async () => {
+    const aplicar = readFileSync("supabase/aplicar/diferenca-reagendamento.sql", "utf8")
+    const functions = (sql: string) => sql.match(/create (?:or replace )?function [\s\S]*?\n\$\$;/g) ?? []
+    const migrations = ["0003_agenda", "0018_fila_whatsapp", "0020_retorno_cliente", "0021_limite_reservas", "0028_reagendamento_whatsapp"]
+    const source = migrations.flatMap((file) => functions(readFileSync(`supabase/migrations/${file}.sql`, "utf8")))
+      .map((definition) => definition.replace(/^create function /, "create or replace function "))
+    const changed = functions(aplicar)
+    expect(changed).toHaveLength(8)
+    for (const definition of changed) expect(source).toContain(definition)
     expect(aplicar).toMatch(/^[\s\S]*\nbegin;[\s\S]*commit;\s*$/)
-  })
-
-  it("supabase/aplicar/0021.sql contém exatamente a migration 0021 (sem deriva), em uma transação", () => {
-    const aplicar = readFileSync("supabase/aplicar/0021.sql", "utf8")
-    expect(aplicar).toContain(readFileSync("supabase/migrations/0021_limite_reservas.sql", "utf8").trim())
-    expect(aplicar).toMatch(/^[\s\S]*\nbegin;[\s\S]*commit;\s*$/)
+    await db.exec(aplicar)
   })
 
   it("supabase/aplicar/0022.sql contém exatamente a migration 0022 (sem deriva), em uma transação", () => {
@@ -134,7 +141,7 @@ describe("migrations em sequência", () => {
     const anon = await q(`select p.proname from pg_proc p join pg_namespace n on n.oid = p.pronamespace
       where n.nspname = 'public' and has_function_privilege('anon', p.oid, 'execute') and p.proname not in ('handle_new_user')
       and not exists (select 1 from pg_depend d where d.objid = p.oid and d.deptype = 'e') order by 1`)
-    expect(anon.map((r) => r.proname)).toEqual(["get_availability", "get_public_shop"])
+    expect(anon.map((r) => r.proname)).toEqual(["get_availability", "get_public_shop", "get_slot_grid"])
   })
 
   it("o razão financeiro continua imutável depois de todas as migrations", async () => {

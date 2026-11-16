@@ -1,7 +1,7 @@
 import { supabase } from "@/lib/supabase"
 import { toast } from "@/ui/sonner"
-import type { BookingRow, CustomerBooking, HoursRow, PublicShopData, Slot } from "./domain"
-import { addDays } from "./domain"
+import type { BookingRow, CustomerBooking, GridSlot, HoursRow, PublicShopData, Slot } from "./domain"
+import { addDays, isMissingSchema } from "./domain"
 
 const BOOKING_COLUMNS =
   "id, barbershop_id, professional_id, customer_id, service_id, servico_nome, preco_centavos, duracao_min, inicio, fim, status, cliente_nome, cliente_whatsapp, professionals(nome, avatar_path)"
@@ -18,6 +18,18 @@ export async function getAvailability(shopId: string, serviceId: string, profess
   })
   if (error) throw error
   return (data ?? []) as Slot[]
+}
+
+/**
+ * Grade do dia com livre e ocupado de cada profissional do serviço (get_slot_grid). `bookingId`: no reagendamento, a própria
+ * reserva não conta como conflito. Sem a função no banco (SQL ainda não aplicado), volta aos horários livres de antes.
+ */
+export async function getSlotGrid(shopId: string, serviceId: string, date: string, bookingId: string | null = null): Promise<GridSlot[]> {
+  const { data, error } = await supabase.rpc("get_slot_grid", { p_barbershop_id: shopId, p_service_id: serviceId, p_data: date, p_booking_id: bookingId })
+  // snip: fallback só até o SQL ser aplicado; depois pode sair
+  if (error && isMissingSchema(error)) return (await getAvailability(shopId, serviceId, null, date)).map((s) => ({ ...s, livre: true }))
+  if (error) throw error
+  return (data ?? []) as GridSlot[]
 }
 
 export type BookingInput = {
@@ -78,8 +90,15 @@ export async function cancelBooking(id: string): Promise<void> {
   if (error) throw error
 }
 
-export async function rescheduleBooking(id: string, inicio: string, professionalId: string | null): Promise<void> {
-  const { error } = await supabase.rpc("reschedule_booking", { p_booking_id: id, p_novo_inicio: inicio, p_professional_id: professionalId })
+export async function rescheduleBooking(id: string, inicio: string, professionalId: string | null, requestId: string): Promise<void> {
+  const args = { p_booking_id: id, p_novo_inicio: inicio, p_professional_id: professionalId }
+  const { error } = await supabase.rpc("reschedule_booking", { ...args, p_request_id: requestId })
+  if (error?.code === "PGRST202") {
+    // Durante a publicação, o banco pode ter apenas a assinatura anterior.
+    const legacy = await supabase.rpc("reschedule_booking", args)
+    if (legacy.error) throw legacy.error
+    return
+  }
   if (error) throw error
 }
 

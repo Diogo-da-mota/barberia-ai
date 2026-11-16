@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { aggregateCustomers, computeOccupancy, addDays, addMonths, bookingErrorMessage, monthGrid, weekStart, computeStats, formatTime, localDate, parseRange, validateContact, zonedToUtc, type BookingRow } from "./domain"
+import { aggregateCustomers, computeOccupancy, addDays, addMonths, bookingErrorMessage, monthGrid, weekStart, computeStats, formatTime, localDate, nearestFree, parseRange, slotTimes, validateContact, zonedToUtc, type BookingRow } from "./domain"
 
 const SP = "America/Sao_Paulo"
 
@@ -116,7 +116,8 @@ describe("bookingErrorMessage", () => {
   it.each([
     ["slot_taken", "Este horário acabou de ser ocupado. Escolha outro."],
     ["booking_limit", "Você já tem 3 reservas futuras ativas nesta barbearia."],
-    ["cancel_window", "O prazo para cancelar ou reagendar já passou. Fale com a barbearia."],
+    ["cancel_window", "O prazo para cancelar já passou. Fale com a barbearia."],
+    ["booking_started", "O horário desta reserva já começou. Fale com a barbearia."],
   ])("traduz %s", (message, text) => expect(bookingErrorMessage({ message })).toBe(text))
 
   it("nunca repassa mensagens internas", () => {
@@ -139,5 +140,30 @@ describe("computeStats", () => {
 
   it("comparecimento fica vazio sem atendimentos encerrados", () => {
     expect(computeStats([row("confirmado", 1)], SP)?.attendance).toBeNull()
+  })
+})
+
+describe("slotTimes (livre, ocupado e quem atende no horário)", () => {
+  const h = (hhmm: string) => `2099-01-10T${hhmm}:00.000Z`
+  const grid = [
+    { prof_id: "f", prof_nome: "Francisco", slot_inicio: h("11"), livre: true },
+    { prof_id: "f", prof_nome: "Francisco", slot_inicio: h("12"), livre: false },
+    { prof_id: "m", prof_nome: "Marcelo", slot_inicio: h("12"), livre: true },
+    { prof_id: "m", prof_nome: "Marcelo", slot_inicio: h("13"), livre: false },
+  ]
+
+  it("profissional escolhido: ocupado continua na lista e aponta quem está livre", () => {
+    expect(slotTimes(grid, "f")).toEqual([
+      { inicio: h("11"), livre: true, livres: [{ prof_id: "f", prof_nome: "Francisco", slot_inicio: h("11") }] },
+      { inicio: h("12"), livre: false, livres: [{ prof_id: "m", prof_nome: "Marcelo", slot_inicio: h("12") }] },
+    ])
+  })
+
+  it("qualquer profissional: livre se alguém atende; ocupado só quando ninguém atende", () => {
+    expect(slotTimes(grid, null).map((t) => [t.inicio, t.livre])).toEqual([[h("11"), true], [h("12"), true], [h("13"), false]])
+  })
+
+  it("horários livres mais próximos, em ordem", () => {
+    expect(nearestFree(slotTimes(grid, null), h("13"), 2).map((t) => t.inicio)).toEqual([h("11"), h("12")])
   })
 })

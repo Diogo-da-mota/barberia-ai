@@ -4,7 +4,7 @@
  * da própria barbearia, registrando o resultado na fila (complete_outbox: enviado, ou nova tentativa/falhou com o erro).
  * Lógica pura: o banco (rpc) e o envio (sendText) chegam de fora, para rodar igual no Deno e nos testes.
  */
-import { buildMessage, messageVariables, renderTemplate, toE164, type EventPayload } from "./messages.ts"
+import { buildMessage, messageVariables, renderTemplate, toE164, withReminderReply, type EventPayload } from "./messages.ts"
 
 export type Rpc = (fn: string, args?: Record<string, unknown>) => Promise<{ data: unknown; error: { message: string } | null }>
 /** Envia o texto pela instância e devolve o id da mensagem no provedor. */
@@ -32,7 +32,7 @@ export async function processarConfirmacoesELembretes(rpc: Rpc, sendText: SendTe
       const payload = item.payload as EventPayload
       const texto = item.modelo?.trim() ? renderTemplate(item.modelo, messageVariables(payload)) : buildMessage(item.tipo, payload)
       if (!texto) throw new Error("tipo_sem_mensagem")
-      providerId = await sendText(item.instancia, toE164(item.destino), texto)
+      providerId = await sendText(item.instancia, toE164(item.destino), item.tipo.startsWith("lembrete_") ? withReminderReply(texto) : texto)
     } catch (err) {
       erro = (err instanceof Error ? err.message : "erro").slice(0, 300)
     }

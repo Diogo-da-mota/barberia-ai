@@ -198,6 +198,16 @@ body {
   .animate-element, .animate-slide-left { animation: none; opacity: 1; filter: none; transform: none; }
 }
 
+/* Reserva: card do profissional livre no horário ocupado pulsa 3 vezes e para. Movimento reduzido: sem pulso (fica o contorno). */
+@keyframes pulso-destaque {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in oklab, var(--primary) 45%, transparent); }
+  50% { box-shadow: 0 0 0 8px color-mix(in oklab, var(--primary) 0%, transparent); }
+}
+.pulso-destaque { animation: pulso-destaque 1.2s ease-in-out 3; }
+@media (prefers-reduced-motion: reduce) {
+  .pulso-destaque { animation: none; }
+}
+
 /* Cor de destaque do usuário (site inteiro: público, painel e pop-ups). Vem de `data-accent` no <html>.
    Valores idênticos a `src/lib/accent.ts` (conferidos por teste). O âmbar é o padrão e não precisa de bloco. */
 html[data-accent="azul"] { --primary: #3B82F6; --primary-foreground: #0B1220; --link: #1D4ED8; }

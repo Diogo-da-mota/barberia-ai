@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from "@testing-library/react"
 import { describe, expect, it, vi } from "vitest"
 import { MessageTemplateEditor } from "./MessageTemplateEditor"
-import { DEFAULT_TEMPLATES } from "../../../../supabase/functions/_shared/messages"
+import { DEFAULT_TEMPLATES, REMINDER_REPLY } from "../../../../supabase/functions/_shared/messages"
 
 const exemplo = { nome: "João", cliente: "João Silva", servico: "Corte + Barba", profissional: "Carlos Barbosa", data: "09/11", dia_semana: "segunda-feira", hora: "08:30", barbearia: "Babearia do TICO", endereco: "", antecedencia: "1 hora", falta: "Falta 1 hora" }
 
@@ -18,8 +18,26 @@ describe("editor do texto da mensagem", () => {
     const { campo } = editor()
     expect(campo).toHaveValue(DEFAULT_TEMPLATES.lembrete)
     expect(screen.getByTestId("previa-lembrete").textContent).toBe(
-      "⏰ Olá, João! Falta 1 hora para o seu atendimento!\n\n✂️ Serviço: Corte + Barba\n👤 Profissional: Carlos Barbosa\n📅 Data: 09/11\n🕔 Horário: 08:30\n📍 Local: Babearia do TICO")
+      "⏰ Olá, João! Falta 1 hora para o seu atendimento!\n\n✂️ Serviço: Corte + Barba\n👤 Profissional: Carlos Barbosa\n📅 Data: 09/11\n🕔 Horário: 08:30\n📍 Local: Babearia do TICO\n\n" + REMINDER_REPLY)
     expect(screen.getByRole("button", { name: /Salvar texto/ })).toBeDisabled() // nada mudou
+  })
+
+  it("lembrete salvo sem o pedido de SIM/NÃO abre com o bloco e permite salvar o texto completo, sem repetir", () => {
+    const antigo = DEFAULT_TEMPLATES.lembrete.replace(`\n\n${REMINDER_REPLY}`, "")
+    const { campo, onSalvar } = editor({ salvo: antigo })
+    expect(campo).toHaveValue(DEFAULT_TEMPLATES.lembrete)
+    expect(screen.getByTestId("previa-lembrete").textContent!.match(/\*SIM\*/g)).toHaveLength(1)
+    fireEvent.click(screen.getByRole("button", { name: /Salvar texto/ })) // difere do banco: habilitado
+    expect(onSalvar).toHaveBeenCalledWith(DEFAULT_TEMPLATES.lembrete)
+  })
+
+  it("editar o bloco SIM/NÃO muda a prévia na hora, sem acrescentar outro bloco", () => {
+    const { campo } = editor()
+    fireEvent.change(campo, { target: { value: DEFAULT_TEMPLATES.lembrete.replace("*SIM*", "*Sim*").replace("atendimento", "corte") } })
+    const previa = screen.getByTestId("previa-lembrete").textContent!
+    expect(previa).toContain("Falta 1 hora para o seu corte!")
+    expect(previa.match(/Confirme sua presença/g)).toHaveLength(1)
+    expect(previa).toContain("Responda *Sim* para confirmar.")
   })
 
   it("escrever o próprio texto e inserir variável no cursor atualiza a prévia e permite salvar", () => {

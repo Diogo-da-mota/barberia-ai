@@ -175,7 +175,8 @@ begin
     select e.id
     from public.outbox_events e
     where e.status = 'pendente' and e.proximo_envio <= now() and e.canal = 'whatsapp'
-      and (e.tipo = 'reserva_confirmada' or e.tipo like 'lembrete\_%' or e.tipo like 'reativacao\_%')
+      and (e.tipo = 'reserva_confirmada' or e.tipo like 'lembrete\_%' or e.tipo like 'reativacao\_%'
+        or (e.tipo = 'reserva_reagendada' and e.max_tentativas = 1))
     order by e.proximo_envio
     limit p_limit
     for update skip locked
@@ -189,7 +190,7 @@ begin
   select m.id, m.barbershop_id, m.booking_id, m.tipo, m.destino, m.payload, m.tentativas, i.evolution_instance_name,
          case when m.tipo = 'reserva_confirmada' then s.msg_confirmacao
               when m.tipo like 'reativacao\_%' then s.msg_retorno
-              else s.msg_lembrete end
+              when m.tipo like 'lembrete\_%' then s.msg_lembrete end
   from marcado m
   join public.barbershops s on s.id = m.barbershop_id
   left join public.integration_accounts i on i.barbershop_id = m.barbershop_id and i.provider = 'whatsapp';

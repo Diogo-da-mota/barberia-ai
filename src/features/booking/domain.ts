@@ -19,6 +19,34 @@ export type PublicShopData = {
   professionals: PublicProfessional[]
 }
 export type Slot = { prof_id: string; prof_nome: string; slot_inicio: string }
+/** Linha da grade do dia (get_slot_grid): o horário de um profissional, livre ou ocupado. */
+export type GridSlot = Slot & { livre: boolean }
+/** Um horário na tela: livre para quem foi escolhido (ou para alguém, em "qualquer") e quem está livre nele. */
+export type SlotTime = { inicio: string; livre: boolean; livres: Slot[] }
+
+/**
+ * Horários do profissional escolhido (null = qualquer). No reagendamento, também inclui vagas de outros profissionais.
+ * Ocupado = sem vaga para o escolhido. `livres` diz quem pode atender naquele horário.
+ */
+export function slotTimes(grid: GridSlot[], professionalId: string | null, showAlternatives = false): SlotTime[] {
+  const byTime = new Map<string, GridSlot[]>()
+  for (const row of grid) byTime.set(row.slot_inicio, [...(byTime.get(row.slot_inicio) ?? []), row])
+  return [...byTime].flatMap(([inicio, rows]) => {
+    const mine = professionalId ? rows.filter((r) => r.prof_id === professionalId) : rows
+    const livres = rows.filter((r) => r.livre).map(({ prof_id, prof_nome, slot_inicio }) => ({ prof_id, prof_nome, slot_inicio }))
+    if (mine.length === 0 && !(showAlternatives && livres.length > 0)) return []
+    return [{ inicio, livre: mine.some((r) => r.livre), livres }]
+  })
+}
+
+/** Até `n` horários livres mais próximos de `inicio` (sugestão quando ninguém está livre no horário pedido). */
+export function nearestFree(times: SlotTime[], inicio: string, n = 3): SlotTime[] {
+  const alvo = new Date(inicio).getTime()
+  return times.filter((t) => t.livre)
+    .sort((a, b) => Math.abs(new Date(a.inicio).getTime() - alvo) - Math.abs(new Date(b.inicio).getTime() - alvo))
+    .slice(0, n)
+    .sort((a, b) => a.inicio.localeCompare(b.inicio))
+}
 
 export type BookingStatus = "pendente" | "confirmado" | "concluido" | "cancelado" | "nao_compareceu"
 export type BookingRow = {
@@ -63,6 +91,8 @@ export function isMissingSchema(error: unknown): boolean {
 }
 
 export const isActive = (status: BookingStatus) => status === "pendente" || status === "confirmado"
+export const canReschedule = (booking: Pick<BookingRow, "status" | "service_id" | "inicio">) =>
+  isActive(booking.status) && Boolean(booking.service_id) && Date.parse(booking.inicio) > Date.now()
 
 // ---------- Datas no fuso da barbearia (instantes ficam em UTC; a tela converte) ----------
 
@@ -160,7 +190,8 @@ const MESSAGES: Record<string, string> = {
   slot_taken: "Este horário acabou de ser ocupado. Escolha outro.",
   booking_limit: "Você já tem 3 reservas futuras ativas nesta barbearia.",
   booking_rate_limited: "Você fez muitas reservas nas últimas 24 horas. Tente novamente mais tarde ou fale com a barbearia.",
-  cancel_window: "O prazo para cancelar ou reagendar já passou. Fale com a barbearia.",
+  cancel_window: "O prazo para cancelar já passou. Fale com a barbearia.",
+  booking_started: "O horário desta reserva já começou. Fale com a barbearia.",
   invalid_contact: "Confira seu nome e seu WhatsApp.",
   invalid_professional: "Escolha o barbeiro.",
   invalid_service: "Este serviço não está disponível.",

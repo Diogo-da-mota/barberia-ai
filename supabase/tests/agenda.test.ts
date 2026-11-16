@@ -259,3 +259,80 @@ describe("T03 e T01: isolamento e leitura", () => {
     expect((await rows(ID.dono, "select distinct tipo from booking_events order by 1")).map((r) => r.tipo)).toEqual(["cancelled", "created", "rescheduled", "status"])
   })
 })
+
+describe("grade de horários (get_slot_grid): ocupado, alternativa e reagendamento", () => {
+  const grade = (user: string | null, dia: string, booking: string | null = null) =>
+    rows(user, "select prof_nome, slot_inicio, livre from get_slot_grid($1, $2, $3, $4)", [lojaA, corte, dia, booking])
+  const livre = (g: Record<string, any>[], prof: string, hora: string) => g.find((r) => r.prof_nome === prof && horaLocal(r.slot_inicio) === hora)?.livre
+
+  it("a reserva da Maria bloqueia o profissional pela duração inteira, outro fica livre e só o dono ignora a própria reserva", async () => {
+    const dia = await val(null, "select ($1::date + 2)::text", [amanha])
+    const dez = (await slots(ana, corte, dia)).find((s) => horaLocal(s.slot_inicio) === "10:00")!.slot_inicio
+    const maria = await reservar(ID.cli7, dez) // Corte de 40 min: 10:00–10:40 com a Ana
+
+    const g = await grade(null, dia)
+    expect(livre(g, "Ana", "10:00")).toBe(false)
+    expect(livre(g, "Ana", "09:30")).toBe(false) // 09:30–10:10 encosta no começo
+    expect(livre(g, "Ana", "10:30")).toBe(false) // 10:30–11:10 encosta no fim
+    expect([livre(g, "Ana", "09:15"), livre(g, "Ana", "10:45")]).toEqual([true, true]) // contíguos
+    expect(livre(g, "Bia", "10:00")).toBe(true) // alternativa no mesmo horário
+    // mesma regra da reserva: o que a grade mostra livre é o que get_availability oferece
+    expect((await slots(ana, corte, dia)).map((s) => horaLocal(s.slot_inicio))).toEqual(g.filter((r) => r.prof_nome === "Ana" && r.livre).map((r) => horaLocal(r.slot_inicio)))
+
+    expect(livre(await grade(ID.cli7, dia, maria), "Ana", "10:00")).toBe(true) // reagendar: a própria reserva não conflita
+    expect(livre(await grade(ID.cli2, dia, maria), "Ana", "10:00")).toBe(false) // reserva de outra pessoa: ignorada só pelo dono
+    expect(livre(await grade(null, dia, maria), "Ana", "10:00")).toBe(false)
+
+    await expect(reservar(ID.donoB, dez)).rejects.toThrow(/slot_taken/) // vaga já ocupada (outra conta, sem limite de reservas)
+    const dezQuinze = new Date(new Date(dez).getTime() + 15 * 60_000).toISOString()
+    await rows(ID.cli7, "select reschedule_booking($1, $2, $3)", [maria, dezQuinze, ana]) // sobrepõe só a própria reserva: aceito
+    expect(livre(await grade(null, dia), "Ana", "09:30")).toBe(true) // agora 10:15–10:55: 09:30–10:10 ficou livre
+    await rows(ID.cli7, "select reschedule_booking($1, $2, $3)", [maria, dezQuinze, bia]) // troca para a Bia no mesmo horário
+    expect(await val(ID.cli7, "select professional_id from bookings where id = $1", [maria])).toBe(bia)
+  })
+})
+
+describe("reagendamento até o início da reserva", () => {
+  it("usa a duração original, permite terminar às 18h e deduplica uma solicitação repetida depois de outra troca", async () => {
+    const dia = await val(null, "select ($1::date + 4)::text", [amanha])
+    const instante = (hora: string) => `${dia}T${hora}:00-03:00`
+    await db.query("update services set duracao_min = 60 where id = $1", [barba])
+    const id = await reservar(ID.cli7, instante("16:00"), ana, barba)
+    await db.query("update services set duracao_min = 30 where id = $1", [barba])
+    await db.query("update barbershops set cancel_window_min = 10080 where id = $1", [lojaA])
+    try {
+      const move = (hora: string, key: string) => rows(ID.cli7, "select reschedule_booking($1, $2, $3, $4)", [id, instante(hora), ana, key])
+      const getBooking = async () => (await rows(ID.cli7, "select id, inicio, fim, occupancy_id from bookings where id = $1", [id]))[0]
+      const antes = await getBooking()
+      const grid = await rows(ID.cli7, "select slot_inicio, livre from get_slot_grid($1, $2, $3, $4)", [lojaA, barba, dia, id])
+      expect(grid.find((s) => horaLocal(s.slot_inicio) === "17:00")?.livre).toBe(true)
+      expect(grid.some((s) => horaLocal(s.slot_inicio) === "17:30")).toBe(false)
+      await expect(move("17:30", U("e1"))).rejects.toThrow(/slot_taken/)
+      expect(await getBooking()).toEqual(antes)
+
+      await move("17:00", U("e2"))
+      const depois = await getBooking()
+      expect(depois).toMatchObject({ id, inicio: new Date(instante("17:00")), fim: new Date(instante("18:00")) })
+      expect(await val(ID.dono, "select count(*)::int from occupancies where professional_id = $1 and periodo @> $2::timestamptz", [ana, instante("16:00")])).toBe(0)
+      expect(await val(ID.dono, "select count(*)::int from occupancies where professional_id = $1 and periodo @> $2::timestamptz", [ana, instante("17:00")])).toBe(1)
+
+      await move("17:00", U("e2"))
+      expect(await getBooking()).toEqual(depois)
+      await move("16:00", U("e3"))
+      await move("17:00", U("e2"))
+      expect((await getBooking()).inicio).toEqual(new Date(instante("16:00")))
+      expect(await val(ID.cli7, "select count(*)::int from booking_events where booking_id = $1 and tipo = 'rescheduled'", [id])).toBe(2)
+    } finally {
+      await db.query("update barbershops set cancel_window_min = 120 where id = $1", [lojaA])
+    }
+  })
+
+  it("bloqueia o reagendamento após o início original, inclusive pela gestão", async () => {
+    const dia = await val(null, "select ($1::date + 5)::text", [amanha])
+    const id = await reservar(ID.cli7, `${dia}T16:00:00-03:00`, ana)
+    await db.query("update bookings set inicio = now() - interval '1 second', fim = now() + interval '40 minutes' where id = $1", [id])
+    for (const user of [ID.cli7, ID.dono]) {
+      await expect(rows(user, "select reschedule_booking($1, $2, $3)", [id, `${dia}T17:00:00-03:00`, ana])).rejects.toThrow(/booking_started/)
+    }
+  })
+})

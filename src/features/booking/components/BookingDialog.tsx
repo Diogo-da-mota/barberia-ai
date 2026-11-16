@@ -2,6 +2,7 @@ import type { ReactNode } from "react"
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/ui/dialog"
 import { Users } from "lucide-react"
 import { ProfessionalCard } from "@/features/catalog/components/ProfessionalCard"
+import { cn } from "@/lib/utils"
 
 /** Pop-up da reserva: abre ao clicar em Reservar e reúne profissional, dia e horário, e os dados. */
 export function BookingDialog({ open, onOpenChange, serviceName, children }: { open: boolean; onOpenChange: (open: boolean) => void; serviceName: string; children: ReactNode }) {
@@ -20,20 +21,32 @@ export function BookingDialog({ open, onOpenChange, serviceName, children }: { o
 
 export type ProfessionalItem = { id: string; nome: string; avatarPath: string | null }
 
-/** Profissionais em cards (foto à esquerda, como no painel). "Qualquer profissional" é a primeira opção. */
-export function ProfessionalChoice({ items, selected, onSelect }: { items: ProfessionalItem[]; selected: string; onSelect: (id: string) => void }) {
+/**
+ * Profissionais em cards (foto à esquerda, como no painel). "Qualquer profissional" é a primeira opção.
+ * `highlight`: livres no horário ocupado que o cliente tocou; pulsam 3 vezes (`nonce` reinicia) e ficam com contorno até a escolha.
+ */
+export function ProfessionalChoice({ items, selected, onSelect, highlight }: {
+  items: ProfessionalItem[]; selected: string; onSelect: (id: string) => void; highlight?: { ids: string[]; nonce: number } | null
+}) {
   return (
     <ul className="grid gap-3 sm:grid-cols-2" aria-label="Profissionais">
       {items.map((item) => {
         const active = item.id === selected
+        const lit = !active && Boolean(highlight?.ids.includes(item.id))
         return (
           <li key={item.id} className="flex">
-            <button type="button" aria-pressed={active} onClick={() => onSelect(item.id)} className="flex w-full rounded-card text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary">
+            <button
+              type="button" aria-pressed={active} onClick={() => onSelect(item.id)}
+              className={cn("relative flex w-full rounded-card text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary", lit && "ring-2 ring-primary")}
+            >
+              {/* só a camada do pulso reinicia a cada toque (nonce); o botão não é recriado e o foco não se perde */}
+              {lit && <span key={highlight!.nonce} aria-hidden="true" className="pulso-destaque pointer-events-none absolute inset-0 rounded-card" />}
               <ProfessionalCard
                 nome={item.nome} photoPath={item.avatarPath} selected={active}
                 photoFallback={item.id === "any" ? <Users className="h-10 w-10" aria-hidden="true" /> : undefined}
                 className="items-center"
               />
+              {lit && <span className="sr-only"> (livre no horário escolhido)</span>}
             </button>
           </li>
         )

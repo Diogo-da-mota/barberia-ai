@@ -19,12 +19,12 @@ import { DEFAULT_TEMPLATE, isTemplateId } from "@/features/site/templates"
 import { isLightTemplate, paletteStyle } from "@/features/site/templates/palette"
 import { cn } from "@/lib/utils"
 import { useMediaQuery } from "@/lib/useMediaQuery"
-import { shopAuthPath, shopBookingsPath, shopPath } from "@/lib/shopPaths"
+import { shopAuthPath, shopPath } from "@/lib/shopPaths"
 import { getPublicShop } from "../api"
 import { ClientReservationCard } from "../components/ClientReservationCard"
 import { CompleteWhatsApp } from "../components/CompleteWhatsApp"
 import { useReservations } from "../hooks/useReservations"
-import { isMissingSchema, type BookingRow, type PublicShopData } from "../domain"
+import { canReschedule, isMissingSchema, type BookingRow, type PublicShopData } from "../domain"
 
 /** Porta do cliente final: pede conta (e-mail e senha ou Google) para ele ver as próprias reservas. */
 /** Com `onOpen` (página de barbearia) os botões levam à porta do cliente dela (/slug/entrar); sem ele (/acesso) o acesso abre aqui. */
@@ -95,10 +95,12 @@ function SectionTitle({ id, icon: Icon, title, hint }: { id: string; icon: Lucid
 export function ClientBookings() {
   const { slug = "" } = useParams()
   const location = useLocation()
+  const next = location.pathname + location.search
+  const bookingToMove = new URLSearchParams(location.search).get("reagendar")
   const shop = useQuery({ queryKey: ["public-shop", slug], queryFn: () => getPublicShop(slug) })
   const { session, loading } = useAuth()
   const navigate = useNavigate()
-  const openAuth = (view: AuthView) => navigate(shopAuthPath(slug, view), { state: { from: location.pathname } })
+  const openAuth = (view: AuthView) => navigate(shopAuthPath(slug, view), { state: { from: next } })
   useShopAccent(shop.data?.cor_destaque)
   useEffect(() => { if (shop.data) rememberShop(slug) }, [shop.data, slug])
   const template = isTemplateId(shop.data?.template) ? shop.data.template : DEFAULT_TEMPLATE
@@ -115,18 +117,19 @@ export function ClientBookings() {
       ) : loading ? (
         <main className="mx-auto flex w-[min(100%-2rem,880px)] flex-col gap-6 py-10"><Skeleton className="h-40 w-full" /></main>
       ) : !session ? (
-        <main className="mx-auto flex w-[min(100%-2rem,880px)] flex-col gap-6 py-10"><ClientLogin next={location.pathname} title={`Acesso — ${shop.data.nome}`} onOpen={openAuth} /></main>
+        <main className="mx-auto flex w-[min(100%-2rem,880px)] flex-col gap-6 py-10"><ClientLogin next={next} title={`Acesso — ${shop.data.nome}`} onOpen={openAuth} /></main>
       ) : (
-        <AuthGuard loginPath={() => shopBookingsPath(slug)}>
-          <ClientArea slug={slug} shop={shop.data} light={isLightTemplate(template)} userName={String(session.user.user_metadata?.full_name ?? session.user.user_metadata?.name ?? "")} />
+        <AuthGuard loginPath={() => next}>
+          <ClientArea key={bookingToMove} slug={slug} shop={shop.data} bookingToMove={bookingToMove} light={isLightTemplate(template)} userName={String(session.user.user_metadata?.full_name ?? session.user.user_metadata?.name ?? "")} />
         </AuthGuard>
       )}
     </div>
   )
 }
 
-function ClientArea({ slug, shop, userName, light }: { slug: string; shop: PublicShopData; userName: string; light: boolean }) {
-  const { bookings, rows, upcoming, history, tz, askCancel, askMove, dialogs } = useReservations(slug)
+function ClientArea({ slug, shop, userName, light, bookingToMove }: { slug: string; shop: PublicShopData; userName: string; light: boolean; bookingToMove: string | null }) {
+  const photos = Object.fromEntries(shop.professionals.map((p) => [p.id, p.avatar_path ?? null]))
+  const { bookings, rows, upcoming, history, tz, askCancel, askMove, dialogs } = useReservations(slug, bookingToMove, photos)
   // fotografia decorativa: primeiro uma foto do ambiente (galeria), depois a capa; nunca a logo
   const decorative = (shop.galeria ?? []).map((path) => publicMediaUrl(path)).find(Boolean) ?? publicMediaUrl(shop.capa_path)
   const photoOf = (b: BookingRow) => {
@@ -147,7 +150,7 @@ function ClientArea({ slug, shop, userName, light }: { slug: string; shop: Publi
       key={b.id} booking={b} tz={tz(b)} photo={photoOf(b)}
       actions={withActions && (
         <>
-          <Button variant="outline" className="h-11 flex-1 gap-2 border-primary/60 text-primary hover:bg-primary/10 sm:flex-none" onClick={() => askMove(b)}><CalendarCheck aria-hidden="true" className="h-4 w-4" />Reagendar</Button>
+          {canReschedule(b) && <Button variant="outline" className="h-11 flex-1 gap-2 border-primary/60 text-primary hover:bg-primary/10 sm:flex-none" onClick={() => askMove(b)}><CalendarCheck aria-hidden="true" className="h-4 w-4" />Reagendar</Button>}
           <Button variant="outline" className="h-11 flex-1 gap-2 text-muted-foreground sm:flex-none" onClick={() => askCancel(b)}><Ban aria-hidden="true" className="h-4 w-4" />Cancelar reserva</Button>
         </>
       )}

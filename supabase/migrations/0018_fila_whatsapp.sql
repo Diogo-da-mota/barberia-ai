@@ -25,7 +25,12 @@ security definer
 set search_path = ''
 as $$
 begin
-  update public.outbox_events set status = 'pendente', atualizado_em = now()
+  -- A Evolution não oferece chave idempotente no envio de texto. Se a confirmação pode ter saído,
+  -- finaliza a tentativa como incerta para impedir que uma nova execução duplique a mensagem.
+  update public.outbox_events
+  set status = case when tipo = 'reserva_reagendada' and max_tentativas = 1 then 'falhou' else 'pendente' end,
+      ultimo_erro = case when tipo = 'reserva_reagendada' and max_tentativas = 1 then 'envio_incerto' else ultimo_erro end,
+      atualizado_em = now()
   where status = 'enviando' and atualizado_em < now() - interval '10 minutes';
 
   update public.outbox_events e
@@ -113,6 +118,7 @@ begin
   where id in (
     select id from public.outbox_events
     where status = 'pendente' and proximo_envio <= now()
+      and not (canal = 'whatsapp' and tipo = 'reserva_reagendada' and max_tentativas = 1)
     order by proximo_envio
     limit p_limit
     for update skip locked
