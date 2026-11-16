@@ -1,8 +1,17 @@
 import type { CSSProperties } from "react"
 
-export type MediaKind = "logo" | "capa" | "galeria"
+export type MediaKind =
+  | "logo" | "capa" | "galeria"
+  | "painel_inicio" | "painel_agendamentos" | "painel_servicos" | "painel_sidebar" | "painel_financeiro" | "login_cliente"
 export const MAX_IMAGE_BYTES = 2 * 1024 * 1024
-export const MAX_GALLERY = 8
+export const MAX_GALLERY = 20
+
+/** Pasta de cada tipo de foto dentro de BARBEARIA/<barbearia>/ no S3 (o banco confere a mesma estrutura: migration 0023). */
+export const MEDIA_FOLDERS: Record<MediaKind, string> = {
+  logo: "site/logo", capa: "site/capa", galeria: "site/galeria",
+  painel_inicio: "painel/inicio", painel_agendamentos: "painel/agendamentos", painel_servicos: "painel/servicos",
+  painel_sidebar: "painel/sidebar", painel_financeiro: "painel/financeiro", login_cliente: "login",
+}
 export const IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp"] as const
 
 export { ACCENTS, isAccent, type AccentKey } from "@/lib/accent"
@@ -25,7 +34,7 @@ export function contrastRatio(a: string, b: string): number {
   return (hi + 0.05) / (lo + 0.05)
 }
 
-/** Validação de conveniência no navegador. A validação que vale é a do servidor (bucket e register_media). */
+/** Validação de conveniência no navegador. A que vale é a do servidor (Edge Function `media` e register_media). */
 export function validateImage(file: { type: string; size: number }, maxBytes = MAX_IMAGE_BYTES): string | null {
   if (!(IMAGE_TYPES as readonly string[]).includes(file.type)) return "Use uma imagem JPEG, PNG ou WebP."
   if (file.size <= 0) return "O arquivo está vazio."
@@ -33,16 +42,11 @@ export function validateImage(file: { type: string; size: number }, maxBytes = M
   return null
 }
 
-const EXT: Record<string, string> = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp" }
-
-export function buildMediaPath(shopId: string, kind: MediaKind, mime: string, id: string): string {
-  return `${shopId}/${kind}-${id}.${EXT[mime] ?? "bin"}`
-}
-
 const MEDIA_MESSAGES: Record<string, string> = {
   invalid_media: "Imagem inválida. Use JPEG, PNG ou WebP de até 2 MB.",
   media_not_found: "O envio da imagem não foi concluído. Tente novamente.",
-  media_limit: "A galeria aceita no máximo 8 imagens. Remova uma antes.",
+  media_limit: `A galeria aceita no máximo ${MAX_GALLERY} imagens. Remova uma antes.`,
+  media_failed: "Não foi possível enviar a imagem. Tente novamente.",
   invalid_site: "Confira a descrição, a cor, o endereço e o telefone.",
   invalid_template: "Escolha um dos modelos disponíveis.",
   invalid_slug: "O link deve ter de 3 a 60 letras minúsculas, números e hífens.",

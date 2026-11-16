@@ -36,7 +36,7 @@ export function HomeView(p: HomeViewProps) {
     : undefined
   const shopCard = <BarbershopList compact logoUrl={p.logoUrl} result={p.result} isError={p.isError} isRetrying={p.isRetrying} onRetry={p.onRetry} />
   return (
-    <Shell hero="/images/painel-topo.jpg">
+    <Shell hero>
       <div className="mx-auto flex w-full max-w-[1480px] flex-col gap-4">
         <header className="flex min-h-32 flex-col justify-center gap-1.5 pt-2 pb-3 sm:min-h-40">
           <h1 className="font-display text-4xl leading-none font-bold tracking-wide sm:text-5xl">

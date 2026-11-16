@@ -91,14 +91,9 @@ export async function cancelBooking(id: string): Promise<void> {
 }
 
 export async function rescheduleBooking(id: string, inicio: string, professionalId: string | null, requestId: string): Promise<void> {
-  const args = { p_booking_id: id, p_novo_inicio: inicio, p_professional_id: professionalId }
-  const { error } = await supabase.rpc("reschedule_booking", { ...args, p_request_id: requestId })
-  if (error?.code === "PGRST202") {
-    // Durante a publicação, o banco pode ter apenas a assinatura anterior.
-    const legacy = await supabase.rpc("reschedule_booking", args)
-    if (legacy.error) throw legacy.error
-    return
-  }
+  const { error } = await supabase.rpc("reschedule_booking", {
+    p_booking_id: id, p_novo_inicio: inicio, p_professional_id: professionalId, p_request_id: requestId,
+  })
   if (error) throw error
 }
 

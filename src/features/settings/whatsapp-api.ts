@@ -13,7 +13,7 @@ export type WhatsAppStatus = {
 }
 
 /** Mensagem do servidor (ex.: Evolution não configurada) em vez do genérico "non-2xx status code". */
-async function functionError(error: unknown, fallback: string): Promise<Error> {
+export async function functionError(error: unknown, fallback: string): Promise<Error> {
   if (error instanceof FunctionsHttpError) {
     const body = (await error.context.json().catch(() => null)) as { error?: string } | null
     if (body?.error) return new Error(body.error)

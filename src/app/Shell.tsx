@@ -1,5 +1,5 @@
 import { useState } from "react"
-import { Link, NavLink, Outlet, useNavigate } from "react-router-dom"
+import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom"
 import {
   Calendar,
   CalendarCheck,
@@ -15,6 +15,7 @@ import {
   Palette,
   MoreHorizontal,
   Scissors,
+  Settings,
   Sun,
   Users,
 } from "lucide-react"
@@ -22,6 +23,8 @@ import { useAuth } from "@/features/auth/hooks/useAuth"
 import { useActiveBarbershop } from "@/features/catalog/hooks/useActiveBarbershop"
 import { ShopLogo } from "@/features/site/components/ShopLogo"
 import { useShopLogo } from "@/features/site/hooks/useShopLogo"
+import { usePanelPhoto } from "@/features/site/hooks/usePanelPhoto"
+import { HeroPhoto, SidebarPhoto } from "./PanelPhotos"
 import { isDark, useTheme } from "@/lib/theme"
 import { cn } from "@/lib/utils"
 import { Button } from "@/ui/button"
@@ -29,6 +32,7 @@ import { Sheet, SheetContent, SheetTitle } from "@/ui/sheet"
 import { toast } from "@/ui/sonner"
 import { shopPath } from "@/lib/shopPaths"
 import { clientAccessPath } from "@/features/auth/lastShop"
+import { LaraLauncher } from "@/features/settings/components/LaraLauncher"
 
 const DESTINATIONS = [
   { href: "/dashboard", label: "Início", shortLabel: "Início", icon: Home },
@@ -48,6 +52,7 @@ const ALL = {
   equipe: { href: "/dashboard/equipe", label: "Equipe", icon: Users },
   mensagens: { href: "/dashboard/mensagens", label: "Mensagens", icon: MessageSquare },
   site: { href: "/dashboard/site", label: "Meu site", icon: Palette },
+  configuracoes: { href: "/dashboard/configuracoes", label: "Configurações", icon: Settings },
   financeiro: { href: "/dashboard/financeiro", label: "Financeiro", icon: Wallet },
   reservas: { href: "/minhas-reservas", label: "Minhas reservas", icon: CalendarCheck },
   mais: { href: "/dashboard/mais", label: "Mais", icon: MoreHorizontal },
@@ -55,11 +60,9 @@ const ALL = {
 
 type ShellProps = {
   children?: React.ReactNode
-  /** Fotografia de fundo atrás do cabeçalho e da saudação (só no tema escuro). Ex.: a tela inicial. */
-  hero?: string
+  /** Fotografia de fundo atrás do cabeçalho e da saudação (só no tema escuro): a tela inicial. A barbearia troca em Meu site › Fotos. */
+  hero?: boolean
 }
-
-const SIDEBAR_PHOTO = "/images/painel-menu.jpg"
 
 function Brand({ collapsible = false }: { collapsible?: boolean }) {
   return (
@@ -82,6 +85,7 @@ export function Shell({ children, hero }: ShellProps) {
   const { theme, toggleTheme } = useTheme()
   const { logout, session, area } = useAuth()
   const navigate = useNavigate()
+  const { pathname } = useLocation()
   const gate = useActiveBarbershop()
   const [menuOpen, setMenuOpen] = useState(false)
 
@@ -94,7 +98,7 @@ export function Shell({ children, hero }: ShellProps) {
     ? [
         ALL.inicio, ALL.agenda, ALL.clientes, ALL.servicos, ALL.equipe,
         ALL.financeiro,
-        ...(gate.canManage ? [ALL.mensagens, ALL.site] : []),
+        ...(gate.canManage ? [ALL.mensagens, ALL.site, ALL.configuracoes] : []),
         ALL.mais,
       ]
     : [ALL.inicio, ALL.reservas, ALL.mais]
@@ -112,7 +116,9 @@ export function Shell({ children, hero }: ShellProps) {
   const ThemeIcon = isDark(theme) ? Sun : Moon
   const dark = isDark(theme)
   const logo = useShopLogo(shop?.id)
+  const sidebarPhoto = usePanelPhoto(dark ? shop?.id : null, "menu") // as fotos do painel só aparecem no tema escuro
   const withHero = Boolean(hero) && dark
+  const heroPhoto = usePanelPhoto(withHero ? shop?.id : null, "inicio")
   const meta = session?.user.user_metadata as Record<string, unknown> | undefined
   const userName = typeof meta?.full_name === "string" ? meta.full_name : typeof meta?.name === "string" ? meta.name : ""
   const avatar = typeof meta?.avatar_url === "string" ? meta.avatar_url : typeof meta?.picture === "string" ? meta.picture : null
@@ -124,10 +130,7 @@ export function Shell({ children, hero }: ShellProps) {
       <aside className="relative hidden w-16 shrink-0 flex-col overflow-hidden border-r border-border bg-card md:flex lg:w-64">
         {dark && (
           <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 bottom-0 hidden h-[60%] lg:block">
-            <img src={SIDEBAR_PHOTO} alt="" loading="lazy" className="h-full w-full object-cover object-center opacity-80" />
-            <div className="absolute inset-0 bg-gradient-to-b from-card via-card/70 to-transparent" />
-            <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent" />
-            <div className="absolute inset-y-0 right-0 w-10 bg-gradient-to-l from-card/80 to-transparent" />
+            <SidebarPhoto src={sidebarPhoto} />
           </div>
         )}
         <div className="relative z-10 flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-3 lg:p-5">
@@ -189,13 +192,7 @@ export function Shell({ children, hero }: ShellProps) {
       </aside>
 
       <div className="relative flex min-w-0 flex-1 flex-col">
-        {withHero && (
-          <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 top-0 h-[440px] overflow-hidden">
-            <img src={hero} alt="" className="h-full w-full object-cover object-[center_40%] opacity-60" />
-            <div className="absolute inset-0 bg-gradient-to-r from-background via-background/70 to-transparent" />
-            <div className="absolute inset-0 bg-gradient-to-b from-background/30 via-transparent to-background" />
-          </div>
-        )}
+        {withHero && <HeroPhoto src={heroPhoto} />}
         <header
           aria-label="Cabeçalho do painel"
           className={cn(
@@ -304,6 +301,9 @@ export function Shell({ children, hero }: ShellProps) {
           </NavLink>
         ))}
       </nav>}
+
+      {/* Lara: botão flutuante da gestão em todo o painel (em Configurações › Assistente o chat já está na tela) */}
+      {area === "painel" && shop && gate.canManage && pathname !== "/dashboard/configuracoes" && <LaraLauncher shopId={shop.id} />}
     </div>
   )
 }

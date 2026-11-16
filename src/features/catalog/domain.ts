@@ -99,21 +99,10 @@ export function catalogErrorMessage(error: unknown, duplicate: string): string {
   return "Não foi possível salvar. Tente novamente."
 }
 
-const PHOTO_EXT: Record<string, string> = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp" }
-
-/** Caminho da foto do serviço no bucket de mídia: a regra do banco (set_service_image) espera este formato. */
-export function servicePhotoPath(shopId: string, serviceId: string, mime: string, id: string): string {
-  return `${shopId}/servico-${serviceId}-${id}.${PHOTO_EXT[mime] ?? "bin"}`
-}
-
 export const MAX_SERVICE_PHOTOS = 5
 
 /** URLs das fotos do serviço: a galeria (fotos) ou, na falta dela, a foto única antiga. */
 export function servicePhotos(service: { imagem_path?: string | null; fotos?: string[] }, toUrl: (path: string) => string = (p) => p): string[] {
   const paths = service.fotos && service.fotos.length > 0 ? service.fotos : service.imagem_path ? [service.imagem_path] : []
   return paths.map(toUrl)
-}
-
-export function professionalAvatarPath(shopId: string, professionalId: string, mime: string, id: string): string {
-  return `${shopId}/profissional-${professionalId}-${id}.${PHOTO_EXT[mime] ?? "bin"}`
 }

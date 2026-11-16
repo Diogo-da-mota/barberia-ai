@@ -3,7 +3,7 @@ import { fireEvent, render, screen, within } from "@testing-library/react"
 import { MemoryRouter } from "react-router-dom"
 import { describe, expect, it, vi } from "vitest"
 
-vi.mock("@/app/Shell", () => ({ Shell: ({ children, hero }: { children: React.ReactNode; hero?: string }) => <div data-testid="shell" data-hero={hero}>{children}</div> }))
+vi.mock("@/app/Shell", () => ({ Shell: ({ children, hero }: { children: React.ReactNode; hero?: boolean }) => <div data-testid="shell" data-hero={String(Boolean(hero))}>{children}</div> }))
 
 import type { BookingRow } from "@/features/booking/domain"
 import { AgendaBoard } from "./AgendaBoard"
@@ -29,7 +29,7 @@ const open = (props: HomeViewProps) => render(<MemoryRouter><HomeView {...props}
 describe("tela inicial: composição com a fotografia de fundo", () => {
   it("a saudação, os indicadores reais, a tabela, o calendário, a barbearia e as ações rápidas aparecem", () => {
     open(view())
-    expect(screen.getByTestId("shell")).toHaveAttribute("data-hero", "/images/painel-topo.jpg")
+    expect(screen.getByTestId("shell")).toHaveAttribute("data-hero", "true")
     expect(screen.getByRole("heading", { name: "Olá, Diogo" })).toBeInTheDocument()
     expect(screen.getByText("Atendimentos hoje").nextElementSibling).toHaveTextContent("2")
     expect(screen.getByText("Próximos 7 dias").nextElementSibling).toHaveTextContent("8")

@@ -14,7 +14,7 @@ import { Skeleton } from "@/ui/skeleton"
 import { rememberShop } from "@/features/auth/lastShop"
 import { applySeo, seoFor } from "@/features/site/domain"
 import { useShopAccent } from "@/lib/appearance"
-import { publicMediaUrl } from "@/features/site/api"
+import { fetchLoginPhoto, publicMediaUrl } from "@/features/site/api"
 import { DEFAULT_TEMPLATE, SiteRenderer, isTemplateId } from "@/features/site/templates"
 import { paletteStyle } from "@/features/site/templates/palette"
 import { buildSiteView } from "@/features/site/templates/view"
@@ -152,6 +152,8 @@ export function PublicShop() {
 
   const shop = useQuery({ queryKey: ["public-shop", slug], queryFn: () => getPublicShop(slug) })
   const data = shop.data
+  // carregada com a página: o acesso abre já com a foto da barbearia (sem foto própria ou com erro, a padrão)
+  const loginPhoto = useQuery({ queryKey: ["login-photo", slug], queryFn: () => fetchLoginPhoto(slug), enabled: Boolean(data), staleTime: 1000 * 60 * 5 })
   useShopAccent(data?.cor_destaque)
   useEffect(() => {
     if (!data) return
@@ -350,6 +352,7 @@ export function PublicShop() {
         client
         shopName={data?.nome}
         shopLogo={view?.logoUrl}
+        photo={loginPhoto.data ?? null}
       />
     </div>
   )

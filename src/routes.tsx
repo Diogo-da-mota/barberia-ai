@@ -3,6 +3,7 @@ import { SHOP_AUTH_VIEWS, SHOP_SECTIONS, shopBookingsPath, shopPath } from "@/li
 import { Finance } from "@/features/finance/pages/Finance"
 import { Messages } from "@/features/messaging/pages/Messages"
 import { SiteSettings } from "@/features/site/pages/SiteSettings"
+import { Settings } from "@/features/settings/pages/Settings"
 import { Home } from "@/features/home/pages/Home"
 import { CreateBarbershop } from "@/features/barbershops/pages/CreateBarbershop"
 import { Services } from "@/features/catalog/pages/Services"
@@ -110,6 +111,7 @@ export const routes: RouteObject[] = [
           { path: "financeiro", element: <Finance /> },
           { path: "mensagens", element: <Messages /> },
           { path: "site", element: <SiteSettings /> },
+          { path: "configuracoes", element: <Settings /> },
           { path: "servicos", element: <Services /> },
           { path: "equipe", element: <Team /> },
         ],

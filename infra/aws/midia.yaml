@@ -1,0 +1,133 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Barberia AI - fotos das barbearias: bucket S3 privado (pasta BARBEARIA/), leitura so pelo CloudFront,
+  usuario de envio com acesso so a BARBEARIA/* (usado pelas Edge Functions media e media-migrate).
+
+Parameters:
+  BucketName:
+    Type: String
+    Default: barberia-midia
+    Description: Nome do bucket (unico no mundo). Se estiver em uso, troque (ex. barberia-midia-br).
+
+Resources:
+  MediaBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Ref BucketName
+      # Sem versionamento: trocar uma foto nao guarda a anterior (a Edge Function apaga a substituida).
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      # CORS so de leitura: o editor baixa a foto atual (fetch) para reajustar. As fotos ja sao publicas pelo CDN.
+      CorsConfiguration:
+        CorsRules:
+          - AllowedMethods: [GET, HEAD]
+            AllowedOrigins: ["*"]
+            AllowedHeaders: ["*"]
+            MaxAge: 86400
+
+  MediaOAC:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub "${BucketName}-oac"
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  MediaCDN:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: Barberia AI - fotos das barbearias
+        HttpVersion: http2and3
+        PriceClass: PriceClass_All # inclui os pontos de entrega da America do Sul
+        Origins:
+          - Id: fotos
+            DomainName: !GetAtt MediaBucket.RegionalDomainName
+            OriginAccessControlId: !GetAtt MediaOAC.Id
+            S3OriginConfig:
+              OriginAccessIdentity: ""
+        DefaultCacheBehavior:
+          TargetOriginId: fotos
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD, OPTIONS]
+          CachedMethods: [GET, HEAD, OPTIONS]
+          Compress: true
+          # Cache longo (cada envio tem nome unico) com Origin na chave: pedidos com CORS ganham copia propria, vinda do S3 com CORS
+          CachePolicyId: !Ref MediaCachePolicy
+
+  # Igual a Managed-CachingOptimized, com Origin na chave. O CORS vem do S3 (CorsConfiguration do bucket): a politica
+  # gerenciada SimpleCORS nao responde com CORS quando o Chrome envia o cabecalho "priority" (todo fetch do Chrome).
+  MediaCachePolicy:
+    Type: AWS::CloudFront::CachePolicy
+    Properties:
+      CachePolicyConfig:
+        Name: !Sub "${BucketName}-cache"
+        Comment: Cache longo com Origin na chave (CORS respondido pelo S3)
+        MinTTL: 1
+        DefaultTTL: 86400
+        MaxTTL: 31536000
+        ParametersInCacheKeyAndForwardedToOrigin:
+          EnableAcceptEncodingGzip: true
+          EnableAcceptEncodingBrotli: true
+          HeadersConfig:
+            HeaderBehavior: whitelist
+            Headers: [Origin]
+          CookiesConfig:
+            CookieBehavior: none
+          QueryStringsConfig:
+            QueryStringBehavior: none
+
+  MediaBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref MediaBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: SoEsteCloudFrontLeAsFotos
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub "${MediaBucket.Arn}/BARBEARIA/*"
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub "arn:aws:cloudfront::${AWS::AccountId}:distribution/${MediaCDN}"
+
+  MediaUploader:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: !Sub "${BucketName}-envio"
+      Policies:
+        - PolicyName: fotos-das-barbearias
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [s3:PutObject, s3:GetObject, s3:DeleteObject]
+                Resource: !Sub "${MediaBucket.Arn}/BARBEARIA/*"
+
+Outputs:
+  Bucket:
+    Description: AWS_S3_BUCKET (segredo das Edge Functions)
+    Value: !Ref MediaBucket
+  CdnUrl:
+    Description: VITE_MEDIA_CDN_URL (frontend, local e Vercel)
+    Value: !Sub "https://${MediaCDN.DomainName}"
+  UploaderUser:
+    Description: Usuario para criar a chave de acesso (aws iam create-access-key)
+    Value: !Ref MediaUploader

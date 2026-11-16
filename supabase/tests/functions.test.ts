@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest"
 import { buildGoogleEvent } from "../functions/_shared/calendar"
 import { DEFAULT_TEMPLATES, buildMessage, leadTimeLabel, messageVariables, renderTemplate, timeLeftLabel, toE164 } from "../functions/_shared/messages"
 import { parseWhatsAppPayload, safeEqual, signHmacSha256, verifyHmacSha256 } from "../functions/_shared/webhook"
+import { decryptSecret, encryptSecret } from "../functions/_shared/secret"
 
 const SECRET = "segredo-do-app"
 const body = JSON.stringify({ hello: "mundo" })
@@ -132,5 +133,56 @@ describe("textos editáveis da confirmação e do lembrete (renderTemplate)", ()
 
   it("antecedência legível", () => {
     expect([15, 30, 60, 120].map(leadTimeLabel)).toEqual(["15 minutos", "30 minutos", "1 hora", "2 horas"])
+  })
+})
+
+describe("fotos no S3 (regras da Edge Function media)", async () => {
+  const { KIND_FOLDER, MEDIA_FOLDER_RE, imageType, keyShop, newKey } = await import("../functions/_shared/image")
+  const shop = "00000000-0000-4000-8000-0000000000a1"
+  const bytes = (...head: number[]) => new Uint8Array([...head, ...new Array(16).fill(0)])
+  const ascii = (text: string) => [...text].map((c) => c.charCodeAt(0))
+
+  it("o tipo vem do conteúdo do arquivo (JPEG, PNG, WebP), não do nome nem do navegador", () => {
+    expect(imageType(bytes(0xff, 0xd8, 0xff))).toEqual({ mime: "image/jpeg", ext: "jpg" })
+    expect(imageType(bytes(0x89, ...ascii("PNG")))).toEqual({ mime: "image/png", ext: "png" })
+    expect(imageType(bytes(...ascii("RIFF"), 0, 0, 0, 0, ...ascii("WEBP")))).toEqual({ mime: "image/webp", ext: "webp" })
+    expect(imageType(bytes(...ascii("<svg")))).toBeNull()
+    expect(imageType(bytes(...ascii("GIF8")))).toBeNull()
+  })
+
+  it("só as pastas da estrutura BARBEARIA/<barbearia>/...; nome único por envio", () => {
+    for (const folder of [...Object.values(KIND_FOLDER), `servicos/${shop}`, `profissionais/${shop}`]) expect(MEDIA_FOLDER_RE.test(folder), folder).toBe(true)
+    for (const folder of ["site", "site/outra", "../site/logo", "servicos/abc", "painel/inicio/x", "documentos"]) expect(MEDIA_FOLDER_RE.test(folder), folder).toBe(false)
+    const a = newKey(shop, "site/logo", "jpg")
+    expect(a).toMatch(new RegExp(`^BARBEARIA/${shop}/site/logo/[0-9a-f-]{36}\\.jpg$`))
+    expect(newKey(shop, "site/logo", "jpg")).not.toBe(a)
+  })
+
+  it("apagar: só caminhos de foto de barbearia, e devolve a barbearia dona (para conferir o papel)", () => {
+    expect(keyShop(`BARBEARIA/${shop}/site/galeria/x-1.webp`)).toBe(shop)
+    for (const key of [`${shop}/logo-x.png`, `BARBEARIA/${shop}/site/logo/x.pdf`, `BARBEARIA/outra/site/logo/x.jpg`, `BARBEARIA/${shop}//x.jpg`, `BARBEARIA/${shop}/../x.jpg`]) expect(keyShop(key), key).toBeNull()
+  })
+})
+
+describe("chave de IA cifrada por barbearia (Edge Function ai-credentials)", () => {
+  const master = btoa(String.fromCharCode(...new Uint8Array(32).fill(7)))
+  const outraMestra = btoa(String.fromCharCode(...new Uint8Array(32).fill(9)))
+  const lojaA = "00000000-0000-4000-8000-0000000000a1"
+  const lojaB = "00000000-0000-4000-8000-0000000000b1"
+  const chave = "sk-proj-exemplo-de-chave-0000000000abcd"
+
+  it("abre só na mesma barbearia e com a mesma chave mestra; o texto cifrado não contém a chave", async () => {
+    const selada = await encryptSecret(chave, lojaA, master)
+    expect(selada).not.toContain(chave)
+    expect(selada).not.toBe(await encryptSecret(chave, lojaA, master)) // iv novo a cada gravação
+    expect(await decryptSecret(selada, lojaA, master)).toBe(chave)
+    await expect(decryptSecret(selada, lojaB, master)).rejects.toThrow() // copiada para outra barbearia não abre
+    await expect(decryptSecret(selada, lojaA, outraMestra)).rejects.toThrow()
+    await expect(decryptSecret(selada.slice(0, -4) + "AAAA", lojaA, master)).rejects.toThrow() // adulterada
+  })
+
+  it("sem chave mestra válida (32 bytes) nada é cifrado", async () => {
+    await expect(encryptSecret(chave, lojaA, undefined)).rejects.toThrow(/AI_CREDENTIALS_KEY/)
+    await expect(encryptSecret(chave, lojaA, btoa("curta"))).rejects.toThrow(/AI_CREDENTIALS_KEY/)
   })
 })

@@ -19,7 +19,7 @@ dist-ssr
 
 # Caches locais de ferramentas (Vite, Supabase CLI, Impeccable)
 .vite
-supabase/.temp
+supabase/**/.temp/
 .impeccable
 
 # Editor directories and files

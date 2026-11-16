@@ -218,3 +218,11 @@ html[data-accent="vermelho"] { --primary: #EF4444; --primary-foreground: #0B1220
 html.dark[data-accent="vermelho"] { --link: #FF8A80; }
 html[data-accent="violeta"] { --primary: #7C3AED; --primary-foreground: #FFFFFF; --link: #6D28D9; }
 html.dark[data-accent="violeta"] { --link: #C4B5FD; }
+
+/* Lara (chat flutuante do painel): o painel sobe do botão. Movimento reduzido: anulado pelo bloco global acima. */
+@keyframes lara-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.97);
+  }
+}

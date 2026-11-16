@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type ChangeEvent, type ReactNode } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { useSearchParams } from "react-router-dom"
 import { Check, Copy, ExternalLink, Image as ImageIcon, Layers, Link2, Monitor, Palette, Pencil, Plus, Tag, Trash2, X, type LucideIcon } from "lucide-react"
 import { CatalogFrame, ShopGate } from "@/features/catalog/components/CatalogFrame"
 import { fetchProfessionals, fetchServices } from "@/features/catalog/api"
@@ -14,8 +15,11 @@ import { EmptyState } from "@/ui/finance"
 import { Input } from "@/ui/input"
 import { Skeleton } from "@/ui/skeleton"
 import { toast } from "@/ui/sonner"
+import { TabbedHeader } from "@/ui/tabbed-header"
+import { Tabs, TabsContent } from "@/ui/tabs"
 import { fetchMedia, fetchSiteProfile, publicMediaUrl, removeMedia, saveSiteProfile, saveSiteTemplate, setShopSlug, uploadMedia, type MediaRow, type SiteProfile } from "../api"
 import { Cropper, type CropSpec } from "../components/ImageCropDialog"
+import { PanelPhotosEditor } from "../components/PanelPhotosEditor"
 import { BRAND_IMAGES, MAX_SOURCE_BYTES, type BrandKind } from "../crop"
 import { MAX_GALLERY, isAccent, siteErrorMessage, validateImage, type AccentKey, type MediaKind } from "../domain"
 import { SitePreview } from "../editor/SitePreview"
@@ -27,38 +31,39 @@ import { isReservedSlug, shopPath, shopUrl } from "@/lib/shopPaths"
 
 const FIELD = "h-11 text-base md:h-10 md:text-sm"
 const SLUG_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/
+const DESCRIPTION = "Monte a página pública da sua barbearia com um template profissional."
+
+/** Abas de Meu site (`?aba=`): Site (template, descrição, cores e endereço) e Fotos (logo, capa e galeria). */
+const TABS = [{ value: "site", label: "Site" }, { value: "fotos", label: "Fotos" }] as const
+type TabId = (typeof TABS)[number]["value"]
+const isTab = (v: string | null): v is TabId => TABS.some((t) => t.value === v)
 
 export function SiteSettings() {
   const gate = useActiveBarbershop()
   const shop = gate.state === "ready" ? gate.active : null
-  const header = (
-    <header className="flex flex-wrap items-center justify-between gap-4">
-      <div className="flex min-w-0 items-center gap-4">
-        <span aria-hidden="true" className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl border border-primary/30 bg-primary/15 text-primary"><Monitor className="h-7 w-7" /></span>
-        <div className="min-w-0">
-          <h1 className="font-display text-2xl font-bold tracking-wide sm:text-[28px]">Meu site</h1>
-          <p className="text-sm text-muted-foreground">Monte a página pública da sua barbearia com um template profissional.</p>
-        </div>
-      </div>
-      {shop && shop.status === "ativo" && (
-        <Button asChild variant="outline" className="h-11 gap-2 md:h-10">
-          <a href={shopPath(shop.slug)} target="_blank" rel="noopener noreferrer"><ExternalLink aria-hidden="true" className="h-4 w-4" />Ver site publicado</a>
-        </Button>
-      )}
-    </header>
+  const [params, setParams] = useSearchParams()
+  const tab: TabId = isTab(params.get("aba")) ? (params.get("aba") as TabId) : "site"
+  const setTab = (value: string) => setParams((cur) => { const next = new URLSearchParams(cur); next.set("aba", value); return next }, { replace: true })
+  const manager = gate.state === "ready" && gate.canManage
+  const viewSite = shop && shop.status === "ativo" && (
+    <Button asChild variant="outline" className="h-11 gap-2 md:h-10">
+      <a href={shopPath(shop.slug)} target="_blank" rel="noopener noreferrer"><ExternalLink aria-hidden="true" className="h-4 w-4" />Ver site publicado</a>
+    </Button>
   )
   return (
-    <CatalogFrame full title="Meu site" description="Monte a página pública da sua barbearia com um template profissional." header={header}>
-      <ShopGate gate={gate}>
-        {(active, canManage) =>
-          canManage ? <Editor shop={active} /> : <div className="rounded-card border border-border bg-card"><EmptyState title="Área da gestão" description="Só o proprietário e o gerente editam o site." /></div>
-        }
-      </ShopGate>
-    </CatalogFrame>
+    <Tabs value={tab} onValueChange={setTab} className="contents">
+      <CatalogFrame full title="Meu site" description={DESCRIPTION} header={<TabbedHeader photo={false} name="site" icon={Monitor} title="Meu site" description={DESCRIPTION} tabs={manager ? TABS : undefined} right={viewSite} />}>
+        <ShopGate gate={gate}>
+          {(active, canManage) =>
+            canManage ? <Editor shop={active} tab={tab} /> : <div className="rounded-card border border-border bg-card"><EmptyState title="Área da gestão" description="Só o proprietário e o gerente editam o site." /></div>
+          }
+        </ShopGate>
+      </CatalogFrame>
+    </Tabs>
   )
 }
 
-function Editor({ shop }: { shop: MyBarbershop }) {
+function Editor({ shop, tab }: { shop: MyBarbershop; tab: TabId }) {
   const profile = useQuery({ queryKey: ["site-profile", shop.id], queryFn: () => fetchSiteProfile(shop.id) })
   const media = useQuery({ queryKey: ["site-media", shop.id], queryFn: () => fetchMedia(shop.id) })
 
@@ -79,7 +84,7 @@ function Editor({ shop }: { shop: MyBarbershop }) {
       </div>
     )
   }
-  return <Workspace shop={shop} profile={profile.data} items={media.data} />
+  return <Workspace shop={shop} profile={profile.data} items={media.data} tab={tab} />
 }
 
 function Block({ icon: Icon, title, hint, children }: { icon: LucideIcon; title: string; hint: string; children: ReactNode }) {
@@ -98,7 +103,7 @@ function Block({ icon: Icon, title, hint, children }: { icon: LucideIcon; title:
   )
 }
 
-function Workspace({ shop, profile, items }: { shop: MyBarbershop; profile: SiteProfile; items: MediaRow[] }) {
+function Workspace({ shop, profile, items, tab }: { shop: MyBarbershop; profile: SiteProfile; items: MediaRow[]; tab: TabId }) {
   const queryClient = useQueryClient()
   const owner = shop.papel === "proprietario"
   const templateSupported = profile.template !== undefined
@@ -183,51 +188,56 @@ function Workspace({ shop, profile, items }: { shop: MyBarbershop; profile: Site
     }
   }
 
+  // Fotos: só as fotos do painel (nada do site público). O rascunho da aba Site continua guardado aqui no Workspace.
+  if (tab === "fotos") return <TabsContent value="fotos"><PanelPhotosEditor shopId={shop.id} shopName={shop.nome} /></TabsContent>
+
   return (
     <div className="grid gap-5 lg:grid-cols-[minmax(320px,28%)_minmax(0,1fr)] lg:items-stretch">
       <div className="flex min-w-0 flex-col overflow-hidden rounded-card border border-border bg-card">
-        <Block icon={Layers} title="Template" hint="Escolha o visual do seu site público.">
-          <div className={cn("flex items-center gap-3 rounded-xl border p-2.5", templateChanged ? "border-warning/40 bg-warning/5" : "border-primary/60 bg-primary/[0.06]")}>
-            <span className="grid h-11 w-11 shrink-0 place-items-center rounded-lg bg-primary/15 font-display text-lg font-bold text-primary">{TEMPLATE_INFO[template].nome.charAt(0)}</span>
-            <span className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1">
-              <span className="font-display text-lg leading-none font-bold tracking-wide">{TEMPLATE_INFO[template].nome}</span>
-              <span className={cn("rounded-md px-2 py-0.5 text-xs font-medium", templateChanged ? "bg-warning/15 text-warning" : "bg-primary/15 text-primary")}>{templateChanged ? "Selecionado, não salvo" : "Selecionado"}</span>
-            </span>
-          </div>
-          {!templateSupported && <p role="status" className="text-[13px] text-warning">A troca de template só pode ser salva depois que a migration 0011 for aplicada no banco. Por enquanto você pode visualizar os cinco modelos.</p>}
-        </Block>
-
-        <Block icon={Tag} title="Marca" hint="Logo, capa e descrição.">
-          <Branding shop={shop} items={items} descricao={descricao} setDescricao={setDescricao} template={template} onLive={(kind, url) => setLive((cur) => ({ ...cur, [kind]: url }))} />
-        </Block>
-
-        <Block icon={ImageIcon} title="Galeria de fotos" hint={`Mostre o ambiente da sua barbearia (até ${MAX_GALLERY} fotos).`}>
-          <GalleryEditor shop={shop} items={gallery} />
-        </Block>
-
-        <Block icon={Palette} title="Cores do site" hint="Defina a cor principal do seu site.">
-          <AccentPicker variant="bolinhas" onPick={(choice) => { const next = isAccent(choice) ? choice : null; setCor(next); saveColor.mutate(next) }} />
-          <p className="text-[13px] text-muted-foreground">Muda na hora a prévia e o painel e fica salva na barbearia: vale para todos os modelos.</p>
-        </Block>
-
-        <Block icon={Link2} title="Endereço do site" hint="O link que você divulga aos clientes.">
-          <div className="flex flex-col gap-2">
-            <div className="flex overflow-hidden rounded-md border border-input bg-background focus-within:ring-2 focus-within:ring-primary">
-              <Input aria-label="Endereço da página" value={slug} disabled={!owner} onChange={(e) => setSlug(e.target.value.toLowerCase())} aria-invalid={slugChanged && Boolean(slugProblem || taken) ? true : undefined}
-                className={cn(FIELD, "min-w-0 flex-1 rounded-none border-0 shadow-none focus-visible:ring-0")} />
-              <button type="button" onClick={() => void copyLink()} aria-label="Copiar link do site" title="Copiar link" className="grid w-11 shrink-0 place-items-center border-l border-border text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary">
-                {copied ? <Check aria-hidden="true" className="h-4 w-4 text-income" /> : <Copy aria-hidden="true" className="h-4 w-4" />}
-              </button>
+        <TabsContent value="site" className="flex flex-col">
+          <Block icon={Layers} title="Template" hint="Escolha o visual do seu site público.">
+            <div className={cn("flex items-center gap-3 rounded-xl border p-2.5", templateChanged ? "border-warning/40 bg-warning/5" : "border-primary/60 bg-primary/[0.06]")}>
+              <span className="grid h-11 w-11 shrink-0 place-items-center rounded-lg bg-primary/15 font-display text-lg font-bold text-primary">{TEMPLATE_INFO[template].nome.charAt(0)}</span>
+              <span className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1">
+                <span className="font-display text-lg leading-none font-bold tracking-wide">{TEMPLATE_INFO[template].nome}</span>
+                <span className={cn("rounded-md px-2 py-0.5 text-xs font-medium", templateChanged ? "bg-warning/15 text-warning" : "bg-primary/15 text-primary")}>{templateChanged ? "Selecionado, não salvo" : "Selecionado"}</span>
+              </span>
             </div>
-            <p className="text-[13px] break-all text-muted-foreground">Link: {shopUrl(profile.slug)}</p>
-            {copied && <p role="status" className="text-[13px] text-income">Link copiado.</p>}
-            {!owner && <p className="text-[13px] text-muted-foreground">Só o proprietário altera o endereço.</p>}
-            {owner && slugChanged && (slugProblem ? <p role="alert" className="text-[13px] text-expense">{slugProblem}</p>
-              : check.isFetching ? <p role="status" className="text-[13px] text-muted-foreground">Verificando disponibilidade…</p>
-              : taken ? <p role="alert" className="text-[13px] text-expense">Este link já está em uso. Escolha outro.</p>
-              : check.isSuccess ? <p role="status" className="text-[13px] text-income">Link disponível. Ao salvar, o endereço antigo deixa de funcionar.</p> : null)}
-          </div>
-        </Block>
+            {!templateSupported && <p role="status" className="text-[13px] text-warning">A troca de template só pode ser salva depois que a migration 0011 for aplicada no banco. Por enquanto você pode visualizar os cinco modelos.</p>}
+          </Block>
+
+          <Block icon={Tag} title="Marca" hint="Logo, capa e descrição.">
+            <Branding shop={shop} items={items} descricao={descricao} setDescricao={setDescricao} template={template} onLive={(kind, url) => setLive((cur) => ({ ...cur, [kind]: url }))} />
+          </Block>
+
+          <Block icon={ImageIcon} title="Galeria de fotos" hint={`Mostre o ambiente da sua barbearia (até ${MAX_GALLERY} fotos).`}>
+            <GalleryEditor shop={shop} items={gallery} />
+          </Block>
+
+          <Block icon={Palette} title="Cores do site" hint="Defina a cor principal do seu site.">
+            <AccentPicker variant="bolinhas" onPick={(choice) => { const next = isAccent(choice) ? choice : null; setCor(next); saveColor.mutate(next) }} />
+            <p className="text-[13px] text-muted-foreground">Muda na hora a prévia e o painel e fica salva na barbearia: vale para todos os modelos.</p>
+          </Block>
+
+          <Block icon={Link2} title="Endereço do site" hint="O link que você divulga aos clientes.">
+            <div className="flex flex-col gap-2">
+              <div className="flex overflow-hidden rounded-md border border-input bg-background focus-within:ring-2 focus-within:ring-primary">
+                <Input aria-label="Endereço da página" value={slug} disabled={!owner} onChange={(e) => setSlug(e.target.value.toLowerCase())} aria-invalid={slugChanged && Boolean(slugProblem || taken) ? true : undefined}
+                  className={cn(FIELD, "min-w-0 flex-1 rounded-none border-0 shadow-none focus-visible:ring-0")} />
+                <button type="button" onClick={() => void copyLink()} aria-label="Copiar link do site" title="Copiar link" className="grid w-11 shrink-0 place-items-center border-l border-border text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary">
+                  {copied ? <Check aria-hidden="true" className="h-4 w-4 text-income" /> : <Copy aria-hidden="true" className="h-4 w-4" />}
+                </button>
+              </div>
+              <p className="text-[13px] break-all text-muted-foreground">Link: {shopUrl(profile.slug)}</p>
+              {copied && <p role="status" className="text-[13px] text-income">Link copiado.</p>}
+              {!owner && <p className="text-[13px] text-muted-foreground">Só o proprietário altera o endereço.</p>}
+              {owner && slugChanged && (slugProblem ? <p role="alert" className="text-[13px] text-expense">{slugProblem}</p>
+                : check.isFetching ? <p role="status" className="text-[13px] text-muted-foreground">Verificando disponibilidade…</p>
+                : taken ? <p role="alert" className="text-[13px] text-expense">Este link já está em uso. Escolha outro.</p>
+                : check.isSuccess ? <p role="status" className="text-[13px] text-income">Link disponível. Ao salvar, o endereço antigo deixa de funcionar.</p> : null)}
+            </div>
+          </Block>
+        </TabsContent>
 
         <div className="sticky bottom-0 z-10 flex flex-col gap-2 border-t border-border bg-card p-4 sm:p-5">
           {error && <p role="alert" className="text-sm text-expense">{error}</p>}
@@ -322,7 +332,8 @@ function Branding({ shop, items, descricao, setDescricao, template, onLive }: { 
     setOpening(kind)
     setError(null)
     try {
-      const response = await fetch(url)
+      // sem o cache do navegador: a cópia guardada pela <img> não traz CORS; o CloudFront responde com CORS a pedidos com Origin
+      const response = await fetch(url, { cache: "no-store" })
       if (!response.ok) throw new Error("fetch")
       const blob = await response.blob()
       setAdjusting({ kind, file: new File([blob], `${kind}-atual`, { type: blob.type || "image/jpeg" }) })

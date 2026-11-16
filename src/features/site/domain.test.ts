@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest"
-import { ACCENTS, accentStyle, applySeo, buildMediaPath, contrastRatio, seoFor, validateImage } from "./domain"
+import { ACCENTS, MAX_GALLERY, MEDIA_FOLDERS, accentStyle, applySeo, contrastRatio, seoFor, validateImage } from "./domain"
 
 describe("cores permitidas do site", () => {
   it("todas mantêm contraste mínimo de 4,5:1 entre fundo de destaque e texto", () => {
@@ -35,12 +35,15 @@ describe("upload de imagens", () => {
     expect(validateImage({ type: "image/png", size: 0 })).toMatch(/vazio/)
     expect(validateImage({ type: "image/png", size: 2 * 1024 * 1024 + 1 })).toMatch(/2 MB/)
   })
-  it("monta caminhos dentro da pasta da barbearia, com extensão pelo tipo real", () => {
-    const shop = "00000000-0000-4000-8000-0000000000a1"
-    expect(buildMediaPath(shop, "logo", "image/png", "abc123")).toBe(`${shop}/logo-abc123.png`)
-    expect(buildMediaPath(shop, "galeria", "image/jpeg", "x")).toBe(`${shop}/galeria-x.jpg`)
-    expect(buildMediaPath(shop, "capa", "image/webp", "y")).toBe(`${shop}/capa-y.webp`)
+  it("cada tipo de foto tem a sua pasta no S3; galeria com até 20 fotos", () => {
+    expect(MAX_GALLERY).toBe(20)
+    expect(MEDIA_FOLDERS).toEqual({
+      logo: "site/logo", capa: "site/capa", galeria: "site/galeria",
+      painel_inicio: "painel/inicio", painel_agendamentos: "painel/agendamentos", painel_servicos: "painel/servicos",
+      painel_sidebar: "painel/sidebar", painel_financeiro: "painel/financeiro", login_cliente: "login",
+    })
   })
+
 })
 
 describe("SEO da página pública", () => {

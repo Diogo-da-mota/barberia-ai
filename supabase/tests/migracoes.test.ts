@@ -31,9 +31,9 @@ afterAll(async () => {
 })
 
 describe("migrations em sequência", () => {
-  it("a sequência de migrations publicada existe e aplica sem erro", async () => {
+  it("as 28 migrations existem, numeradas sem lacunas, e aplicam sem erro", async () => {
     const files = readdirSync("supabase/migrations").filter((f) => f.endsWith(".sql")).sort()
-    expect(files.map((f) => f.slice(0, 4))).toEqual(["0001", "0002", "0003", "0004", "0005", "0006", "0007", "0008", "0009", "0010", "0011", "0012", "0013", "0014", "0015", "0016", "0017", "0018", "0019", "0020", "0021", "0022", "0026", "0027", "0028"])
+    expect(files.map((f) => f.slice(0, 4))).toEqual(["0001", "0002", "0003", "0004", "0005", "0006", "0007", "0008", "0009", "0010", "0011", "0012", "0013", "0014", "0015", "0016", "0017", "0018", "0019", "0020", "0021", "0022", "0023", "0024", "0025", "0026", "0027", "0028"])
   })
 
   it("supabase/aplicar/0005-0009.sql contém exatamente as migrations 0005 a 0009 (sem deriva)", () => {
@@ -41,6 +41,12 @@ describe("migrations em sequência", () => {
     for (const f of ["0005_financeiro", "0006_eventos", "0007_site", "0008_planos", "0009_calendario"]) {
       expect(aplicar, f).toContain(readFileSync(`supabase/migrations/${f}.sql`, "utf8").trim())
     }
+    expect(aplicar).toMatch(/^[\s\S]*\nbegin;[\s\S]*commit;\s*$/)
+  })
+
+  it("supabase/aplicar/0023.sql contém exatamente a migration 0023 (sem deriva), em uma transação", () => {
+    const aplicar = readFileSync("supabase/aplicar/0023.sql", "utf8")
+    expect(aplicar).toContain(readFileSync("supabase/migrations/0023_midia_s3.sql", "utf8").trim())
     expect(aplicar).toMatch(/^[\s\S]*\nbegin;[\s\S]*commit;\s*$/)
   })
 
@@ -85,6 +91,24 @@ describe("migrations em sequência", () => {
     const aplicar = readFileSync("supabase/aplicar/0022.sql", "utf8")
     expect(aplicar).toContain(readFileSync("supabase/migrations/0022_agendamento_manual.sql", "utf8").trim())
     expect(aplicar).toMatch(/^[\s\S]*\nbegin;[\s\S]*commit;\s*$/)
+  })
+
+  it("supabase/aplicar/0024.sql contém exatamente a migration 0024 (sem deriva), em uma transação", () => {
+    const aplicar = readFileSync("supabase/aplicar/0024.sql", "utf8")
+    expect(aplicar).toContain(readFileSync("supabase/migrations/0024_credenciais_ia.sql", "utf8").trim())
+    expect(aplicar).toMatch(/^[\s\S]*\nbegin;[\s\S]*commit;\s*$/)
+  })
+
+  it("supabase/aplicar/0025.sql contém exatamente a migration 0025 (sem deriva), em uma transação", () => {
+    const aplicar = readFileSync("supabase/aplicar/0025.sql", "utf8")
+    expect(aplicar).toContain(readFileSync("supabase/migrations/0025_instrucoes_assistente.sql", "utf8").trim())
+    expect(aplicar).toMatch(/^[\s\S]*\nbegin;[\s\S]*commit;\s*$/)
+  })
+
+  it("a chave de IA da barbearia (0024) não tem nenhum acesso do navegador: só a Edge Function (service_role)", async () => {
+    const acessos = await q(`select grantee, privilege_type from information_schema.role_table_grants
+      where table_schema = 'public' and table_name = 'ai_credentials' and grantee in ('anon', 'authenticated', 'PUBLIC')`)
+    expect(acessos).toEqual([])
   })
 
   it("toda tabela do schema public tem RLS ligada", async () => {
@@ -141,7 +165,7 @@ describe("migrations em sequência", () => {
     const anon = await q(`select p.proname from pg_proc p join pg_namespace n on n.oid = p.pronamespace
       where n.nspname = 'public' and has_function_privilege('anon', p.oid, 'execute') and p.proname not in ('handle_new_user')
       and not exists (select 1 from pg_depend d where d.objid = p.oid and d.deptype = 'e') order by 1`)
-    expect(anon.map((r) => r.proname)).toEqual(["get_availability", "get_public_shop", "get_slot_grid"])
+    expect(anon.map((r) => r.proname)).toEqual(["get_availability", "get_public_shop", "get_shop_login_photo", "get_slot_grid"])
   })
 
   it("o razão financeiro continua imutável depois de todas as migrations", async () => {

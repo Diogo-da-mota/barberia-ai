@@ -7,7 +7,12 @@ import { EmptyState } from "@/ui/finance"
 import { PageBanner, type BannerName } from "@/ui/page-banner"
 import { Skeleton } from "@/ui/skeleton"
 import type { MyBarbershop } from "@/features/home/domain"
-import type { ActiveBarbershop } from "../hooks/useActiveBarbershop"
+import type { PanelPhoto } from "@/features/site/api"
+import { usePanelPhoto } from "@/features/site/hooks/usePanelPhoto"
+import { useActiveBarbershop, type ActiveBarbershop } from "../hooks/useActiveBarbershop"
+
+/** Faixas que a barbearia troca em Meu site › Fotos (as outras usam sempre a foto padrão). */
+const BANNER_PHOTOS: Partial<Record<BannerName, PanelPhoto>> = { agenda: "agenda", servicos: "servicos" }
 
 type CatalogFrameProps = {
   title: string
@@ -29,6 +34,8 @@ type CatalogFrameProps = {
 /** Moldura das telas de lista (768px, Design System seção 5). */
 export function CatalogFrame({ title, description, action, wide, banner, bar, full, header, children }: CatalogFrameProps) {
   const showBar = bar ?? Boolean(banner)
+  const gate = useActiveBarbershop()
+  const bannerPhoto = usePanelPhoto(gate.state === "ready" ? gate.active?.id : null, banner && BANNER_PHOTOS[banner])
   return (
     <Shell>
       <div className={cn("mx-auto flex w-full flex-col gap-6", full ? "max-w-[1480px]" : wide ? "max-w-[1120px]" : "max-w-[768px]")}>
@@ -43,7 +50,7 @@ export function CatalogFrame({ title, description, action, wide, banner, bar, fu
               {action}
             </header>
           )
-          return banner ? <PageBanner name={banner} className="[.dark_&]:px-4 [.dark_&]:sm:px-5">{head}</PageBanner> : head
+          return banner ? <PageBanner name={banner} photo={bannerPhoto} className="[.dark_&]:px-4 [.dark_&]:sm:px-5">{head}</PageBanner> : head
         })()}
         {children}
       </div>

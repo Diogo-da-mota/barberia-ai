@@ -1,8 +1,7 @@
 import { supabase } from "@/lib/supabase"
 import { fetchPayments } from "@/features/finance/api"
 import { SALES_DAYS, type SaleRow } from "./sales"
-import { BUCKET } from "@/features/site/api"
-import { professionalAvatarPath, servicePhotoPath } from "./domain"
+import { removeStoredFiles, uploadToStorage } from "@/features/site/api"
 import type { CatalogResult, Professional, ProfessionalInput, Service, ServiceInput } from "./domain"
 
 /** Resposta do PostgREST quando a tabela ainda não existe no banco. */
@@ -139,36 +138,29 @@ export async function deleteProfessional(barbershopId: string, id: string): Prom
   if (!data?.length) throw Object.assign(new Error("not_found"), { code: "42501" })
 }
 
-/**
- * Envia a foto do serviço ao bucket de mídia da própria barbearia e só então a vincula (set_service_image).
- * Se o banco recusar, o arquivo enviado é apagado. A foto anterior é apagada depois que a nova foi aceita.
- */
+/** Foto do serviço (pasta servicos/<serviço> no S3): envia, vincula e apaga a anterior; se o banco recusar, apaga o envio. */
 export async function uploadServiceImage(shopId: string, serviceId: string, file: File): Promise<void> {
-  const path = servicePhotoPath(shopId, serviceId, file.type, crypto.randomUUID().slice(0, 8))
-  const upload = await supabase.storage.from(BUCKET).upload(path, file, { contentType: file.type, upsert: false })
-  if (upload.error) throw upload.error
-  const { data, error } = await supabase.rpc("set_service_image", { p_service_id: serviceId, p_path: path })
+  const { key } = await uploadToStorage(shopId, `servicos/${serviceId}`, file)
+  const { data, error } = await supabase.rpc("set_service_image", { p_service_id: serviceId, p_path: key })
   if (error) {
-    await supabase.storage.from(BUCKET).remove([path])
+    await removeStoredFiles([key])
     throw error
   }
-  if (typeof data === "string" && data) await supabase.storage.from(BUCKET).remove([data])
+  await removeStoredFiles([data as string | null])
 }
 
 export async function removeServiceImage(serviceId: string): Promise<void> {
   const { data, error } = await supabase.rpc("set_service_image", { p_service_id: serviceId, p_path: null })
   if (error) throw error
-  if (typeof data === "string" && data) await supabase.storage.from(BUCKET).remove([data])
+  await removeStoredFiles([data as string | null])
 }
 
-/** Galeria do serviço (até 5): envia ao bucket da barbearia e só então registra; se o banco recusar (ex.: 6ª foto), apaga o arquivo. */
+/** Galeria do serviço (até 5): envia e só então registra; se o banco recusar (ex.: 6ª foto), apaga o envio. */
 export async function addServicePhoto(shopId: string, serviceId: string, file: File): Promise<void> {
-  const path = servicePhotoPath(shopId, serviceId, file.type, crypto.randomUUID().slice(0, 8))
-  const upload = await supabase.storage.from(BUCKET).upload(path, file, { contentType: file.type, upsert: false })
-  if (upload.error) throw upload.error
-  const { error } = await supabase.rpc("add_service_photo", { p_service_id: serviceId, p_path: path })
+  const { key } = await uploadToStorage(shopId, `servicos/${serviceId}`, file)
+  const { error } = await supabase.rpc("add_service_photo", { p_service_id: serviceId, p_path: key })
   if (error) {
-    await supabase.storage.from(BUCKET).remove([path])
+    await removeStoredFiles([key])
     throw error
   }
 }
@@ -176,26 +168,24 @@ export async function addServicePhoto(shopId: string, serviceId: string, file: F
 export async function removeServicePhoto(photoId: string): Promise<void> {
   const { data, error } = await supabase.rpc("remove_service_photo", { p_id: photoId })
   if (error) throw error
-  if (typeof data === "string" && data) await supabase.storage.from(BUCKET).remove([data])
+  await removeStoredFiles([data as string | null])
 }
 
-/** Foto de perfil do profissional (estrutura: Supabase Storage por enquanto, sem AWS). */
+/** Foto do profissional (pasta profissionais/<profissional> no S3): envia, vincula e apaga a anterior. */
 export async function uploadProfessionalAvatar(shopId: string, professionalId: string, file: File): Promise<void> {
-  const path = professionalAvatarPath(shopId, professionalId, file.type, crypto.randomUUID().slice(0, 8))
-  const upload = await supabase.storage.from(BUCKET).upload(path, file, { contentType: file.type, upsert: false })
-  if (upload.error) throw upload.error
-  const { data, error } = await supabase.rpc("set_professional_avatar", { p_professional_id: professionalId, p_path: path })
+  const { key } = await uploadToStorage(shopId, `profissionais/${professionalId}`, file)
+  const { data, error } = await supabase.rpc("set_professional_avatar", { p_professional_id: professionalId, p_path: key })
   if (error) {
-    await supabase.storage.from(BUCKET).remove([path])
+    await removeStoredFiles([key])
     throw error
   }
-  if (typeof data === "string" && data) await supabase.storage.from(BUCKET).remove([data])
+  await removeStoredFiles([data as string | null])
 }
 
 export async function removeProfessionalAvatar(professionalId: string): Promise<void> {
   const { data, error } = await supabase.rpc("set_professional_avatar", { p_professional_id: professionalId, p_path: null })
   if (error) throw error
-  if (typeof data === "string" && data) await supabase.storage.from(BUCKET).remove([data])
+  await removeStoredFiles([data as string | null])
 }
 
 export type ProfessionalContact = { telefone: string | null; email: string | null; documento: string | null }

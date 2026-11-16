@@ -90,7 +90,7 @@ describe("Shell", () => {
     const [sidebar] = screen.getAllByRole("navigation", { name: "Navegação principal" })
     expect(hrefsOf(sidebar)).toEqual([
       "/dashboard", "/dashboard/agendamentos", "/dashboard/clientes", "/dashboard/servicos", "/dashboard/equipe",
-      "/dashboard/financeiro", "/dashboard/mensagens", "/dashboard/site", "/dashboard/mais",
+      "/dashboard/financeiro", "/dashboard/mensagens", "/dashboard/site", "/dashboard/configuracoes", "/dashboard/mais",
     ])
   })
 
@@ -141,11 +141,13 @@ describe("Shell", () => {
     expect(screen.queryByRole("link", { name: "Ver site" })).not.toBeInTheDocument()
   })
 
-  it("Mensagens e Meu site são só da gestão: gerente vê, barbeiro não", async () => {
+  it("Mensagens, Meu site e Configurações são só da gestão: gerente vê, barbeiro não", async () => {
     withRole("gerente")
     const view = renderShell()
     expect(await screen.findByRole("link", { name: "Mensagens" })).toBeInTheDocument()
     expect(screen.getByRole("link", { name: "Meu site" })).toBeInTheDocument()
+    expect(screen.getByRole("link", { name: "Configurações" })).toHaveAttribute("href", "/dashboard/configuracoes")
+    expect(screen.getByRole("button", { name: "Conversar com a Lara" })).toBeInTheDocument() // Lara flutuante só da gestão
     view.unmount()
 
     withRole("barbeiro")
@@ -153,6 +155,8 @@ describe("Shell", () => {
     await screen.findByRole("link", { name: "Financeiro" })
     expect(screen.queryByRole("link", { name: "Mensagens" })).not.toBeInTheDocument()
     expect(screen.queryByRole("link", { name: "Meu site" })).not.toBeInTheDocument()
+    expect(screen.queryByRole("link", { name: "Configurações" })).not.toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: "Conversar com a Lara" })).not.toBeInTheDocument()
   })
 
   it("no celular o botão Menu abre a mesma lista da sidebar, sem repetir destinos", async () => {
