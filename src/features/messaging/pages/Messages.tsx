@@ -117,7 +117,7 @@ function Panels({ shop }: { shop: MyBarbershop }) {
   const replyOf = (m: OutboxRow | null) => (m?.bookings ? repliesByBooking.get(m.bookings.id) ?? null : null)
 
   return (
-    <>
+    <div className="flex flex-col gap-4">
       <WhatsAppStatus status={whatsapp} />
       <MessageStats total={total} />
 
@@ -172,6 +172,6 @@ function Panels({ shop }: { shop: MyBarbershop }) {
         </Dialog>
       )}
       <DeleteMessageDialog message={removing} shopId={shop.id} onClose={() => { if (removing && removing.id === selectedId) setSelectedId(null); setRemoving(null) }} />
-    </>
+    </div>
   )
 }

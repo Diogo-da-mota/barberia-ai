@@ -1,6 +1,7 @@
 import { createBrowserRouter, Navigate, Outlet, useLocation, useParams, type RouteObject } from "react-router-dom"
 import { SHOP_AUTH_VIEWS, SHOP_SECTIONS, shopBookingsPath, shopPath } from "@/lib/shopPaths"
 import { Finance } from "@/features/finance/pages/Finance"
+import { Analytics } from "@/features/analytics/pages/Analytics"
 import { Messages } from "@/features/messaging/pages/Messages"
 import { SiteSettings } from "@/features/site/pages/SiteSettings"
 import { Settings } from "@/features/settings/pages/Settings"
@@ -109,6 +110,7 @@ export const routes: RouteObject[] = [
           { path: "horarios", element: <Navigate to="/dashboard/equipe" replace /> }, // os horários agora ficam na edição do profissional (Equipe)
           { path: "clientes", element: <Customers /> },
           { path: "financeiro", element: <Finance /> },
+          { path: "analises", element: <Analytics /> },
           { path: "mensagens", element: <Messages /> },
           { path: "site", element: <SiteSettings /> },
           { path: "configuracoes", element: <Settings /> },

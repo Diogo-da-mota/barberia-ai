@@ -90,7 +90,7 @@ describe("Shell", () => {
     const [sidebar] = screen.getAllByRole("navigation", { name: "Navegação principal" })
     expect(hrefsOf(sidebar)).toEqual([
       "/dashboard", "/dashboard/agendamentos", "/dashboard/clientes", "/dashboard/servicos", "/dashboard/equipe",
-      "/dashboard/financeiro", "/dashboard/mensagens", "/dashboard/site", "/dashboard/configuracoes", "/dashboard/mais",
+      "/dashboard/financeiro", "/dashboard/analises", "/dashboard/mensagens", "/dashboard/site", "/dashboard/configuracoes", "/dashboard/mais",
     ])
   })
 
@@ -156,6 +156,7 @@ describe("Shell", () => {
     expect(screen.queryByRole("link", { name: "Mensagens" })).not.toBeInTheDocument()
     expect(screen.queryByRole("link", { name: "Meu site" })).not.toBeInTheDocument()
     expect(screen.queryByRole("link", { name: "Configurações" })).not.toBeInTheDocument()
+    expect(screen.queryByRole("link", { name: "Análises" })).not.toBeInTheDocument()
     expect(screen.queryByRole("button", { name: "Conversar com a Lara" })).not.toBeInTheDocument()
   })
 

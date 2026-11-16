@@ -1,6 +1,7 @@
 import { useState } from "react"
 import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom"
 import {
+  BarChart3,
   Calendar,
   CalendarCheck,
   Contact,
@@ -54,6 +55,7 @@ const ALL = {
   site: { href: "/dashboard/site", label: "Meu site", icon: Palette },
   configuracoes: { href: "/dashboard/configuracoes", label: "Configurações", icon: Settings },
   financeiro: { href: "/dashboard/financeiro", label: "Financeiro", icon: Wallet },
+  analises: { href: "/dashboard/analises", label: "Análises", icon: BarChart3 },
   reservas: { href: "/minhas-reservas", label: "Minhas reservas", icon: CalendarCheck },
   mais: { href: "/dashboard/mais", label: "Mais", icon: MoreHorizontal },
 } satisfies Record<string, Destination>
@@ -98,7 +100,7 @@ export function Shell({ children, hero }: ShellProps) {
     ? [
         ALL.inicio, ALL.agenda, ALL.clientes, ALL.servicos, ALL.equipe,
         ALL.financeiro,
-        ...(gate.canManage ? [ALL.mensagens, ALL.site, ALL.configuracoes] : []),
+        ...(gate.canManage ? [ALL.analises, ALL.mensagens, ALL.site, ALL.configuracoes] : []),
         ALL.mais,
       ]
     : [ALL.inicio, ALL.reservas, ALL.mais]
