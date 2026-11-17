@@ -61,12 +61,13 @@ export function buildMessage(tipo: string, p: EventPayload): string | null {
       return `${nome}Sua reserva em ${casa} está registrada.\n${detalhe}\n\n${REMINDER_REPLY}`
     case "reserva_confirmada":
       return `${nome}Sua reserva em ${casa} está confirmada.\n${detalhe}`
-    case "reserva_reagendada": {
-      if (!p.cliente || !p.servico || !p.inicio || !p.fim) return null
-      const duracao = leadTimeLabel((Date.parse(p.fim) - Date.parse(p.inicio)) / 60_000)
-      if (!duracao) return null
-      return `✅ ${p.cliente}, seu reagendamento foi confirmado para as ${hora}!\n\n✂️ ${p.servico} — ${duracao}.\n\n⚠️ *Atenção:* chegue pontualmente. Em caso de atraso, seu atendimento poderá ser cancelado conforme as regras da barbearia.`
-    }
+    case "reserva_reagendada":
+      // Mesmo formato da confirmação (DEFAULT_TEMPLATES.confirmacao), com o novo dia e horário.
+      if (!p.cliente || !p.servico || !p.inicio) return null
+      return renderTemplate(
+        "✅ Olá, {nome}! Seu agendamento foi reagendado.\n\n✂️ Serviço: {servico}\n👤 Profissional: {profissional}\n📅 Data: {data}\n🕔 Horário: {hora}\n📍 Local: {barbearia}\n\n📲 Se precisar, responda aqui no WhatsApp.",
+        messageVariables(p),
+      )
     case "reserva_cancelada":
       return `${nome}Sua reserva em ${casa} foi cancelada.\n${detalhe}`
     case "lembrete_24h":

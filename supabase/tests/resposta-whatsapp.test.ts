@@ -236,7 +236,7 @@ describe("lembrete → cliente responde SIM ou NÃO", () => {
     await executarWorker()
     await executarWorker()
     expect(envios.slice(totalEnvios).map((e) => e.texto)).toEqual([
-      "✅ Maria, seu reagendamento foi confirmado para as 17:00!\n\n✂️ Corte — 40 minutos.\n\n⚠️ *Atenção:* chegue pontualmente. Em caso de atraso, seu atendimento poderá ser cancelado conforme as regras da barbearia.",
+      `✅ Olá, Maria! Seu agendamento foi reagendado.\n\n✂️ Serviço: Corte\n👤 Profissional: Ana\n📅 Data: ${new Intl.DateTimeFormat("pt-BR", { timeZone: "America/Sao_Paulo", day: "2-digit", month: "2-digit" }).format(new Date(destino))}\n🕔 Horário: 17:00\n📍 Local: Barbearia A\n\n📲 Se precisar, responda aqui no WhatsApp.`,
     ])
     expect(await sql("select inicio from bookings where id = $1", [id])).toEqual([{ inicio: destino }])
     expect(await sql("select status from outbox_events where booking_id = $1 and tipo = 'reserva_reagendada'", [id])).toEqual([{ status: "enviado" }])

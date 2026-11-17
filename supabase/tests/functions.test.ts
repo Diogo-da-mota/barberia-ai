@@ -74,7 +74,9 @@ describe("mensagens (F08-04)", () => {
       expect(lembrete, tipo).toContain("14:30")
     }
     expect(buildMessage("reserva_cancelada", base)).toMatch(/cancelad/i)
-    expect(buildMessage("reserva_reagendada", { ...base, fim: "2026-11-07T18:30:00Z" })).toContain("✂️ Corte — 1 hora.")
+    expect(buildMessage("reserva_reagendada", base)).toBe(
+      "✅ Olá, João! Seu agendamento foi reagendado.\n\n✂️ Serviço: Corte\n👤 Profissional: Ana\n📅 Data: 07/11\n🕔 Horário: 14:30\n📍 Local: Barbearia A\n\n📲 Se precisar, responda aqui no WhatsApp.",
+    )
     expect(buildMessage("reativacao_30", base)).toMatch(/PARAR/)
     expect(buildMessage("calendar_upsert", base)).toBeNull() // não é mensagem ao cliente
   })
