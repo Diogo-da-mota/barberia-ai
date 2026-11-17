@@ -14,6 +14,7 @@ import { EmptyState, Field, Panel, StatusBadge } from "@/ui/finance"
 import { DateTimeField } from "@/ui/date-time"
 import { Input } from "@/ui/input"
 import { Skeleton } from "@/ui/skeleton"
+import { WhatsAppIcon } from "@/ui/whatsapp-icon"
 import { toast } from "@/ui/sonner"
 import { ManualBookingDialog } from "../components/ManualBookingDialog"
 import { ReservationCard } from "../components/ReservationCard"
@@ -145,14 +146,24 @@ function DayAgenda({ shopId, tz, readOnly }: { shopId: string; tz: string; readO
           </>
         )}
       >
-        <p className="flex flex-wrap items-center gap-2 text-base font-semibold">{row.booking.servico_nome}<StatusBadge variant={BADGE[row.booking.status]}>{STATUS_LABEL[row.booking.status]}</StatusBadge></p>
-        <p className="text-sm font-medium tabular-nums">{formatTime(row.inicio, tz)} – {formatTime(row.fim, tz)}</p>
-        <p className="text-sm text-muted-foreground">
-          {[row.booking.cliente_nome, row.booking.professionals?.nome, formatDuration(row.booking.duracao_min), formatPrice(row.booking.preco_centavos)].filter(Boolean).join(" · ")}
+        <div className="flex flex-col gap-1.5">{/* um pouco mais de espaço entre as linhas do card */}
+        <p className="flex flex-wrap items-center gap-2 text-base font-semibold">
+          {row.booking.servico_nome}
+          <span className="text-sm font-medium tabular-nums">{formatTime(row.inicio, tz)} – {formatTime(row.fim, tz)}</span>
+          <StatusBadge variant={BADGE[row.booking.status]}>{STATUS_LABEL[row.booking.status]}</StatusBadge>
         </p>
-        <a className="inline-flex min-h-11 items-center text-sm font-medium text-link underline-offset-4 hover:underline md:min-h-0" href={`https://wa.me/${row.booking.cliente_whatsapp.length <= 11 ? `55${row.booking.cliente_whatsapp}` : row.booking.cliente_whatsapp}`} target="_blank" rel="noreferrer">
-          WhatsApp {formatPhone(row.booking.cliente_whatsapp)}
-        </a>
+        {/* linha 1: cliente + ícone do WhatsApp + telefone (o link vale para os dois); linha 2: profissional · duração · valor */}
+        <p className="flex flex-wrap items-center gap-x-2 text-sm">
+          <span className="font-medium">{row.booking.cliente_nome}</span>
+          <a className="inline-flex min-h-11 items-center gap-1.5 font-medium text-link underline-offset-4 hover:underline md:min-h-0" href={`https://wa.me/${row.booking.cliente_whatsapp.length <= 11 ? `55${row.booking.cliente_whatsapp}` : row.booking.cliente_whatsapp}`} target="_blank" rel="noreferrer" aria-label={`WhatsApp ${formatPhone(row.booking.cliente_whatsapp)}`}>
+            <WhatsAppIcon className="h-4 w-4" />
+            <span className="tabular-nums">{formatPhone(row.booking.cliente_whatsapp)}</span>
+          </a>
+        </p>
+        <p className="text-sm text-muted-foreground">
+          {[row.booking.professionals?.nome, formatDuration(row.booking.duracao_min), formatPrice(row.booking.preco_centavos)].filter(Boolean).join(" · ")}
+        </p>
+        </div>
       </ReservationCard>
     )
 
