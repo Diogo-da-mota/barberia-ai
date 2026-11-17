@@ -1,7 +1,7 @@
 import { supabase } from "@/lib/supabase"
 import { utcWindow } from "@/features/finance/summary"
 import type { AnalyticsBooking, AnalyticsPayment, AnalyticsRefund, Range } from "./domain"
-import type { Visit } from "./returns"
+import type { Upcoming, Visit } from "./returns"
 
 const PAGE = 1000
 const MAX_PAGES = 20
@@ -58,5 +58,15 @@ export function fetchCompletedHistory(shopId: string): Promise<Visit[]> {
     .from("bookings")
     .select("customer_id, cliente_nome, cliente_whatsapp, service_id, servico_nome, inicio")
     .eq("barbershop_id", shopId).eq("status", "concluido")
+    .order("inicio").order("id").range(a, b))
+}
+
+/** Reservas ativas (pendente ou confirmada) que ainda vão acontecer: quem já marcou a próxima visita. Só o que identifica o cliente. */
+export function fetchUpcomingBookings(shopId: string): Promise<Upcoming[]> {
+  const now = new Date().toISOString()
+  return all<Upcoming>((a, b) => supabase
+    .from("bookings")
+    .select("customer_id, cliente_whatsapp, inicio, status")
+    .eq("barbershop_id", shopId).in("status", ["pendente", "confirmado"]).gt("inicio", now)
     .order("inicio").order("id").range(a, b))
 }

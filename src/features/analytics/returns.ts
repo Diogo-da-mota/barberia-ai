@@ -1,4 +1,4 @@
-import { localDate } from "@/features/booking/domain"
+import { isActive, localDate, type BookingStatus } from "@/features/booking/domain"
 import { phoneDigits } from "@/lib/br"
 
 /**
@@ -8,6 +8,11 @@ import { phoneDigits } from "@/lib/br"
  */
 
 export type Visit = { customer_id: string | null; cliente_nome: string; cliente_whatsapp: string; service_id: string | null; servico_nome: string; inicio: string }
+
+/** Reserva da agenda, para saber quem já marcou a próxima visita. */
+export type Upcoming = { customer_id: string | null; cliente_whatsapp: string; inicio: string; status: BookingStatus }
+/** `agendado` vence `atrasado`: quem já marcou a próxima visita nunca aparece como atrasado. */
+export type ReturnStatus = "no_intervalo" | "atrasado" | "agendado"
 
 /** Menos clientes que isso não formam uma média: a tela mostra "Sem dados suficientes". */
 export const MIN_RETURN_CLIENTS = 3
@@ -21,8 +26,13 @@ export type ClientReturn = {
   media: number | null
   ultimo: string
   diasDesde: number
-  /** Já passou mais tempo desde a última visita do que o intervalo habitual. */
-  atrasado: boolean
+  /**
+   * `agendado`: tem reserva futura ativa (pendente ou confirmada). `atrasado`: passou do intervalo habitual e não tem.
+   * `no_intervalo`: ainda dentro do intervalo habitual.
+   */
+  situacao: ReturnStatus
+  /** Data (fuso da barbearia) da próxima reserva ativa, quando existe. */
+  proxima: string | null
 }
 export type ServiceReturn = { key: string; nome: string; /** Null sem clientes suficientes. */ media: number | null; clientes: number }
 export type ReturnAnalysis = {
@@ -31,6 +41,8 @@ export type ReturnAnalysis = {
   recorrentes: number
   unicos: number
   atrasados: number
+  /** Recorrentes com a próxima visita já marcada. */
+  agendados: number
   mediaGeral: number | null
   clientes: ClientReturn[]
   servicos: ServiceReturn[]
@@ -53,23 +65,38 @@ function meanInterval(days: Set<string>): number | null {
  * Um cliente = a conta vinculada; reserva sem conta agrupa pelo WhatsApp normalizado e, quando esse número pertence a uma
  * única conta, junta-se a ela (mesma pessoa, sem duplicar). Sem conta e sem número não há como identificar: fica de fora.
  */
-function clientKeys(visits: Visit[]): (string | null)[] {
+function clientKeys(visits: Visit[]) {
   const accounts = new Map<string, Set<string>>()
   for (const v of visits) {
     const phone = phoneDigits(v.cliente_whatsapp ?? "")
     if (v.customer_id && phone) accounts.set(phone, (accounts.get(phone) ?? new Set()).add(v.customer_id))
   }
-  return visits.map((v) => {
-    if (v.customer_id) return v.customer_id
-    const phone = phoneDigits(v.cliente_whatsapp ?? "")
+  const byPhone = (whatsapp: string) => {
+    const phone = phoneDigits(whatsapp ?? "")
     if (!phone) return null
     const owners = accounts.get(phone)
     return owners?.size === 1 ? [...owners][0] : `tel:${phone}`
-  })
+  }
+  return { keys: visits.map((v) => v.customer_id ?? byPhone(v.cliente_whatsapp)), byPhone }
 }
 
-export function analyzeReturns(visits: Visit[], tz: string, today: string, catalog: { id: string; nome: string; ativo: boolean }[] = []): ReturnAnalysis {
-  const keys = clientKeys(visits)
+/**
+ * `upcoming`: reservas da agenda; só contam as ativas (pendente ou confirmada) que começam depois de `now`. A identificação
+ * é a mesma das visitas e a reserva vale tanto pela conta quanto pelo WhatsApp (ex.: visitas marcadas pela barbearia e a
+ * próxima feita pelo cliente na própria conta). Não muda nenhuma média.
+ */
+export function analyzeReturns(
+  visits: Visit[], tz: string, today: string, catalog: { id: string; nome: string; ativo: boolean }[] = [],
+  upcoming: Upcoming[] = [], now = new Date().toISOString(),
+): ReturnAnalysis {
+  const { keys, byPhone } = clientKeys(visits)
+  const nextVisit = new Map<string, string>()
+  for (const u of upcoming) {
+    if (!isActive(u.status) || Date.parse(u.inicio) <= Date.parse(now)) continue
+    for (const key of [u.customer_id, byPhone(u.cliente_whatsapp)]) {
+      if (key && (!nextVisit.has(key) || u.inicio < nextVisit.get(key)!)) nextVisit.set(key, u.inicio)
+    }
+  }
   const clients = new Map<string, { nome: string; ultimoInicio: string; days: Set<string>; services: Map<string, Set<string>> }>()
   const names = new Map(catalog.map((s) => [s.id, s.nome]))
   const serviceNames = new Map<string, string>(catalog.filter((s) => s.ativo).map((s) => [s.id, s.nome]))
@@ -96,7 +123,9 @@ export function analyzeReturns(visits: Visit[], tz: string, today: string, catal
     const media = meanInterval(c.days)
     const ultimo = [...c.days].sort().pop()!
     const diasDesde = Math.max(0, dayNumber(today) - dayNumber(ultimo))
-    return { key, nome: c.nome, visitas: c.days.size, media, ultimo, diasDesde, atrasado: media !== null && diasDesde > media }
+    const next = nextVisit.get(key)
+    const situacao: ReturnStatus = next ? "agendado" : media !== null && diasDesde > media ? "atrasado" : "no_intervalo"
+    return { key, nome: c.nome, visitas: c.days.size, media, ultimo, diasDesde, situacao, proxima: next ? localDate(next, tz) : null }
   })
   const recurring = list.filter((c) => c.media !== null)
 
@@ -116,10 +145,11 @@ export function analyzeReturns(visits: Visit[], tz: string, today: string, catal
     desde,
     recorrentes: recurring.length,
     unicos: list.length - recurring.length,
-    atrasados: recurring.filter((c) => c.atrasado).length,
+    atrasados: recurring.filter((c) => c.situacao === "atrasado").length,
+    agendados: recurring.filter((c) => c.situacao === "agendado").length,
     mediaGeral: recurring.length >= MIN_RETURN_CLIENTS ? mean(recurring.map((c) => c.media!)) : null,
-    // quem mais passou do intervalo habitual primeiro
-    clientes: recurring.sort((a, b) => (b.diasDesde - b.media!) - (a.diasDesde - a.media!) || a.nome.localeCompare(b.nome)),
+    // atrasados primeiro; dentro de cada grupo, quem mais passou do intervalo habitual
+    clientes: recurring.sort((a, b) => Number(b.situacao === "atrasado") - Number(a.situacao === "atrasado") || (b.diasDesde - b.media!) - (a.diasDesde - a.media!) || a.nome.localeCompare(b.nome)),
     servicos,
   }
 }

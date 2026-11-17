@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest"
-import { analyzeReturns, type Visit } from "./returns"
+import { analyzeReturns, type Upcoming, type Visit } from "./returns"
 
 const TZ = "America/Sao_Paulo"
 const TODAY = "2026-11-16"
@@ -25,13 +25,13 @@ describe("frequência de retorno", () => {
     ], TZ, TODAY)
     expect(r.mediaGeral).toBe(30) // (7 + 30 + 53) ÷ 3; a média de todos os intervalos juntos seria 18,5
     expect(r).toMatchObject({ recorrentes: 3, unicos: 1 })
-    expect(r.clientes.find((c) => c.nome === "ana")).toMatchObject({ visitas: 5, media: 7, ultimo: "2026-09-29", diasDesde: 48, atrasado: true })
+    expect(r.clientes.find((c) => c.nome === "ana")).toMatchObject({ visitas: 5, media: 7, ultimo: "2026-09-29", diasDesde: 48, situacao: "atrasado", proxima: null })
   })
 
   it("com menos de 3 clientes recorrentes a média geral fica sem dados suficientes, mas a individual aparece", () => {
     const r = analyzeReturns([visit("ana", "2026-11-01"), visit("ana", "2026-11-11")], TZ, TODAY)
     expect(r.mediaGeral).toBeNull()
-    expect(r.clientes[0]).toMatchObject({ media: 10, diasDesde: 5, atrasado: false })
+    expect(r.clientes[0]).toMatchObject({ media: 10, diasDesde: 5, situacao: "no_intervalo" })
   })
 
   it("reservas no mesmo dia contam como uma visita, nunca como retorno em zero dias", () => {
@@ -73,5 +73,59 @@ describe("frequência de retorno", () => {
     ], TZ, TODAY)
     expect(r).toMatchObject({ recorrentes: 1, unicos: 1 }) // sem conta e sem número não é identificável
     expect(r.clientes[0]).toMatchObject({ key: "ana", nome: "Ana Maria", visitas: 2, media: 20 })
+  })
+})
+
+describe("retorno agendado", () => {
+  const NOW = "2026-11-16T15:00:00Z"
+  const next = (cliente: string | null, inicio: string, over: Partial<Upcoming> = {}): Upcoming => ({ customer_id: cliente, cliente_whatsapp: "", inicio, status: "confirmado", ...over })
+  // costuma voltar a cada 20 dias e está há 25 sem vir
+  const late = (cliente: string, over: Partial<Visit> = {}) => [visit(cliente, "2026-10-02", over), visit(cliente, "2026-10-22", over)]
+  const run = (visits: Visit[], upcoming: Upcoming[]) => analyzeReturns(visits, TZ, TODAY, [], upcoming, NOW)
+
+  it("atrasado sem agendamento futuro continua atrasado", () => {
+    const r = run(late("ana"), [])
+    expect(r).toMatchObject({ atrasados: 1, agendados: 0 })
+    expect(r.clientes[0]).toMatchObject({ media: 20, diasDesde: 25, situacao: "atrasado", proxima: null })
+  })
+
+  it("atrasado que já marcou a próxima visita (pendente ou confirmada) aparece como retorno agendado", () => {
+    for (const status of ["pendente", "confirmado"] as const) {
+      const r = run(late("ana"), [next("ana", "2026-11-17T13:00:00Z", { status })])
+      expect(r).toMatchObject({ atrasados: 0, agendados: 1, recorrentes: 1 })
+      expect(r.clientes[0]).toMatchObject({ situacao: "agendado", proxima: "2026-11-17", media: 20, diasDesde: 25 })
+    }
+  })
+
+  it("dentro do intervalo com agendamento futuro também é retorno agendado, na data do fuso da barbearia", () => {
+    const r = run([visit("ana", "2026-10-22"), visit("ana", "2026-11-11")], [next("ana", "2026-11-21T01:00:00Z")]) // 22h do dia 20 em Brasília
+    expect(r.clientes[0]).toMatchObject({ situacao: "agendado", proxima: "2026-11-20" })
+  })
+
+  it("reserva futura cancelada, falta, concluída ou que já passou não conta", () => {
+    const r = run(late("ana"), [
+      next("ana", "2026-11-17T13:00:00Z", { status: "cancelado" }), next("ana", "2026-11-18T13:00:00Z", { status: "nao_compareceu" }),
+      next("ana", "2026-11-19T13:00:00Z", { status: "concluido" }), next("ana", "2026-11-16T12:00:00Z"), // confirmada, mas antes de agora
+    ])
+    expect(r.clientes[0]).toMatchObject({ situacao: "atrasado", proxima: null })
+  })
+
+  it("identifica pelo WhatsApp: visitas marcadas pela barbearia e próxima reserva manual ou pela conta do cliente", () => {
+    const manual = { customer_id: null, cliente_whatsapp: "+55 64 99275-0733" }
+    const visits = [...late("maria", manual), ...late("rui", { customer_id: null, cliente_whatsapp: "+55 11 91234-5678" })]
+    for (const u of [next(null, "2026-11-17T13:00:00Z", { cliente_whatsapp: "64992750733" }), next("conta-maria", "2026-11-17T13:00:00Z", { cliente_whatsapp: "(64) 99275-0733" })]) {
+      const r = run(visits, [u])
+      expect(r).toMatchObject({ atrasados: 1, agendados: 1 })
+      expect(r.clientes.map((c) => [c.nome, c.situacao])).toEqual([["rui", "atrasado"], ["maria", "agendado"]]) // atrasado primeiro
+    }
+  })
+
+  it("não muda as médias; cliente com uma única visita segue fora da média e da lista, mesmo com reserva futura", () => {
+    const visits = [...late("ana"), ...late("bia"), ...late("caio"), visit("duda", "2026-11-01")]
+    const withNext = run(visits, [next("ana", "2026-11-17T13:00:00Z"), next("duda", "2026-11-17T13:00:00Z")])
+    const without = run(visits, [])
+    expect(withNext).toMatchObject({ mediaGeral: 20, recorrentes: 3, unicos: 1, atrasados: 2, agendados: 1 })
+    expect(withNext.servicos).toEqual(without.servicos)
+    expect(withNext.clientes.some((c) => c.nome === "duda")).toBe(false)
   })
 })

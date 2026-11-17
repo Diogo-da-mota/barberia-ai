@@ -15,7 +15,7 @@ import { cn } from "@/lib/utils"
 import { Button } from "@/ui/button"
 import { DateField } from "@/ui/date-time"
 import { EmptyState } from "@/ui/finance"
-import { fetchAnalytics, fetchCompletedHistory } from "../api"
+import { fetchAnalytics, fetchCompletedHistory, fetchUpcomingBookings } from "../api"
 import { analyzeReturns, MIN_RETURN_CLIENTS } from "../returns"
 import {
   bookingsIn, byHour, byProfessional, byService, byWeekday, confirmedRevenue, lastDays, leastWanted, peakHour, previousRange, series, totals, weekdayExtremes,
@@ -195,18 +195,19 @@ function ReturnSection({ shop, today }: { shop: MyBarbershop; today: string }) {
   const [showAll, setShowAll] = useState(false)
   const history = useQuery({ queryKey: ["analytics-returns", shop.id], queryFn: () => fetchCompletedHistory(shop.id) })
   const services = useQuery({ queryKey: ["services", shop.id], queryFn: () => fetchServices(shop.id) })
+  const upcoming = useQuery({ queryKey: ["analytics-upcoming", shop.id], queryFn: () => fetchUpcomingBookings(shop.id) })
   const result = useMemo(() => {
-    if (!history.data || !services.data) return null
-    return analyzeReturns(history.data, tz, today, services.data.status === "ok" ? services.data.data : [])
-  }, [history.data, services.data, tz, today])
+    if (!history.data || !services.data || !upcoming.data) return null
+    return analyzeReturns(history.data, tz, today, services.data.status === "ok" ? services.data.data : [], upcoming.data)
+  }, [history.data, services.data, upcoming.data, tz, today])
 
   const title = "Frequência de retorno dos clientes"
-  if (history.isError || services.isError) {
+  if (history.isError || services.isError || upcoming.isError) {
     return (
       <Section title={title}>
         <div role="alert" className="flex flex-col items-start gap-3">
           <p className="text-sm font-semibold">Não foi possível carregar o histórico de atendimentos</p>
-          <Button variant="outline" className="h-11 md:h-10" onClick={() => { void history.refetch(); void services.refetch() }}>Tentar novamente</Button>
+          <Button variant="outline" className="h-11 md:h-10" onClick={() => { void history.refetch(); void services.refetch(); void upcoming.refetch() }}>Tentar novamente</Button>
         </div>
       </Section>
     )
@@ -224,7 +225,8 @@ function ReturnSection({ shop, today }: { shop: MyBarbershop; today: string }) {
             { label: "Média geral de retorno", value: result.mediaGeral === null ? NO_DATA : `a cada ${days(result.mediaGeral)}` },
             { label: "Clientes recorrentes", value: num(result.recorrentes) },
             { label: "Uma única visita", value: num(result.unicos) },
-            { label: "Passaram do intervalo habitual", value: num(result.atrasados), tone: result.atrasados > 0 ? "warning" : undefined },
+            { label: "Passaram do intervalo", value: num(result.atrasados), tone: result.atrasados > 0 ? "warning" : undefined },
+            { label: "Retorno agendado", value: num(result.agendados) },
           ]} />
           <p className="text-xs text-muted-foreground">
             {result.mediaGeral === null
@@ -250,19 +252,22 @@ function ReturnSection({ shop, today }: { shop: MyBarbershop; today: string }) {
 
           <div className="flex min-w-0 flex-col gap-2">
             <h3 className="font-display text-sm font-bold tracking-wide">Clientes recorrentes</h3>
-            <p className="text-xs text-muted-foreground">Quem mais passou do próprio intervalo habitual aparece primeiro.</p>
+            <p className="text-xs text-muted-foreground">Quem passou do próprio intervalo habitual e ainda não marcou a próxima visita aparece primeiro.</p>
             {result.clientes.length === 0 ? (
               <p className="text-sm text-muted-foreground">{NO_DATA}: nenhum cliente com mais de uma visita.</p>
             ) : (
               <>
-                <Table head={["Cliente", "Visitas", "Retorna a cada", "Última visita", "Sem vir há"]}>
+                <Table head={["Cliente", "Visitas", "Retorna a cada", "Última visita", "Sem vir há", "Situação"]}>
                   {shown.map((c) => (
                     <tr key={c.key} className="border-t border-border">
                       <Cell first>{c.nome}</Cell>
                       <Cell>{num(c.visitas)}</Cell>
                       <Cell>{days(c.media!)}</Cell>
                       <Cell>{dateBR(c.ultimo)}</Cell>
-                      <Cell strong={c.atrasado}><span className={cn(c.atrasado && "text-warning")}>{days(c.diasDesde)}</span>{c.atrasado && <span className="sr-only"> (passou do intervalo habitual)</span>}</Cell>
+                      <Cell>{days(c.diasDesde)}</Cell>
+                      <Cell strong={c.situacao === "atrasado"}>
+                        {c.situacao === "agendado" ? `Retorno agendado · ${dateBR(c.proxima!)}` : c.situacao === "atrasado" ? <span className="text-warning">Passou do intervalo</span> : <Muted>Dentro do intervalo</Muted>}
+                      </Cell>
                     </tr>
                   ))}
                 </Table>
