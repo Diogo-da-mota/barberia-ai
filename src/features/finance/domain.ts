@@ -13,6 +13,53 @@ export const PAYMENT_FORMS: { value: PaymentForm; label: string }[] = [
 
 export const paymentFormLabel = (form: string) => PAYMENT_FORMS.find((f) => f.value === form)?.label ?? form
 
+/** Despesa: as formas de recebimento mais boleto e transferência (só registro; nada é emitido nem pago pelo sistema). */
+export type ExpenseForm = PaymentForm | "boleto" | "transferencia"
+export const EXPENSE_FORMS: { value: ExpenseForm; label: string }[] = [...PAYMENT_FORMS, { value: "boleto", label: "Boleto" }, { value: "transferencia", label: "Transferência" }]
+export const expenseFormLabel = (form: string) => EXPENSE_FORMS.find((f) => f.value === form)?.label ?? form
+
+export type ExpenseFrequency = "semanal" | "quinzenal" | "mensal"
+export const EXPENSE_FREQUENCIES: { value: ExpenseFrequency; label: string }[] = [
+  { value: "semanal", label: "Toda semana" },
+  { value: "quinzenal", label: "A cada 15 dias" },
+  { value: "mensal", label: "Todo mês" },
+]
+export const expenseFrequencyLabel = (f: string) => EXPENSE_FREQUENCIES.find((x) => x.value === f)?.label ?? f
+
+/** `legado` = custo lançado antes do controle de contas: conta como custo na própria data, sem dados de pagamento. */
+export type ExpenseStatus = "legado" | "pendente" | "paga"
+export type ExpenseLike = { valor_centavos: number; data: string; situacao: ExpenseStatus; pago_em: string | null; valor_pago_centavos: number | null }
+
+/** "Vencida" não existe no banco: é a pendente com vencimento anterior a hoje (data local da barbearia). */
+export const expenseView = (e: Pick<ExpenseLike, "situacao" | "data">, today: string): ExpenseStatus | "vencida" =>
+  e.situacao === "pendente" && e.data < today ? "vencida" : e.situacao
+
+/** Selo de situação: variante do `StatusBadge` e rótulo. */
+export const EXPENSE_BADGE = { vencida: ["expense", "Vencida"], pendente: ["warning", "Pendente"], paga: ["income", "Paga"], legado: ["default", "Lançamento antigo"] } as const
+
+export type Sum = { cents: number; count: number }
+/**
+ * Indicadores do MÊS DE VENCIMENTO (as contas recebidas já são só as que vencem no mês).
+ * `pagas` soma o valor efetivamente pago, mesmo que o pagamento tenha sido em outro mês: aqui o mês é o do vencimento;
+ * o fluxo de caixa (Resumo, `finance_report`) é que conta pela data real do pagamento. Lançamento antigo fica separado:
+ * entra no total do mês, mas nunca em "Já pagas". `previstas` = pendentes de recorrência (valor estimado).
+ */
+export function expenseTotals(entries: (ExpenseLike & { recurrence_id?: string | null })[], today: string): { total: Sum; falta: Sum; pagas: Sum; vencidas: Sum; antigas: Sum; previstas: Sum } {
+  const zero = (): Sum => ({ cents: 0, count: 0 })
+  const t = { total: zero(), falta: zero(), pagas: zero(), vencidas: zero(), antigas: zero(), previstas: zero() }
+  const add = (s: Sum, cents: number) => { s.cents += cents; s.count += 1 }
+  for (const e of entries) {
+    const cents = e.situacao === "paga" ? e.valor_pago_centavos ?? e.valor_centavos : e.valor_centavos
+    add(t.total, cents)
+    if (e.situacao === "pendente") {
+      add(t.falta, cents)
+      if (e.data < today) add(t.vencidas, cents)
+      else if (e.recurrence_id) add(t.previstas, cents)
+    } else add(e.situacao === "paga" ? t.pagas : t.antigas, cents)
+  }
+  return t
+}
+
 export function formatCommissionStatus(status: CommissionStatus): string {
   return { provisionada: "A repassar", liquidada: "Repassada", cancelada: "Cancelada" }[status]
 }
@@ -52,15 +99,21 @@ const MESSAGES: Record<string, string> = {
   invalid_payment: "Confira o valor, a forma de pagamento e as parcelas.",
   invalid_refund: "Confira o valor do estorno.",
   invalid_rule: "Confira o tipo e o valor da regra de comissão.",
-  invalid_expense: "Confira a descrição, a categoria, o valor e a data do custo.",
+  invalid_expense: "Confira a descrição, a categoria, o valor e o vencimento da despesa.",
+  invalid_expense_payment: "Confira o pagamento: a data não pode ser futura, o valor deve ser maior que zero e a forma é obrigatória.",
+  expense_not_pending: "Esta conta já foi paga ou não está mais em aberto. A lista foi atualizada.",
+  expense_not_paid: "Esta conta não tem pagamento registrado para reverter. A lista foi atualizada.",
+  invalid_expense_batch: "Envie de 1 a 30 despesas por vez.",
   invalid_period: "Confira as datas do período.",
   idempotency_conflict: "Esta operação já foi registrada com outros dados. Tente novamente.",
   forbidden: "Você não tem permissão para esta ação.",
 }
 
 export function financeErrorMessage(error: unknown): string {
-  const { message } = (error ?? {}) as { message?: string }
+  const { message, code } = (error ?? {}) as { message?: string; code?: string }
+  if (code === "PGRST202") return "Esta ação depende de uma atualização do banco de dados que ainda não foi aplicada."
   const key = Object.keys(MESSAGES).find((k) => message === k)
+  if (!key && /failed to fetch|networkerror|load failed/i.test(message ?? "")) return "Sem conexão com a internet. Nada foi perdido: confira a rede e tente de novo."
   return key ? MESSAGES[key] : "Não foi possível concluir. Tente novamente."
 }
 

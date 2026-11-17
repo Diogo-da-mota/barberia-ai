@@ -1,5 +1,5 @@
 import { supabase } from "@/lib/supabase"
-import type { CommissionStatus, PaymentForm, RuleKind } from "./domain"
+import type { CommissionStatus, ExpenseForm, ExpenseFrequency, ExpenseStatus, PaymentForm, RuleKind } from "./domain"
 
 export type Report = {
   previsto_centavos: number
@@ -8,6 +8,8 @@ export type Report = {
   comissoes_provisionadas_centavos: number
   comissoes_liquidadas_centavos: number
   resultado_estimado_centavos: number
+  /** Pendentes com vencimento no período: obrigação, fora de Custos e do Resultado. 0 enquanto a migration 0029 não está no banco. */
+  despesas_a_pagar_centavos: number
 }
 
 export type CompletedBooking = {
@@ -54,6 +56,7 @@ export async function fetchReport(shopId: string, de: string, ate: string): Prom
     comissoes_provisionadas_centavos: num(row?.comissoes_provisionadas_centavos),
     comissoes_liquidadas_centavos: num(row?.comissoes_liquidadas_centavos),
     resultado_estimado_centavos: num(row?.resultado_estimado_centavos),
+    despesas_a_pagar_centavos: num(row?.despesas_a_pagar_centavos),
   }
 }
 
@@ -155,18 +158,119 @@ export async function createPayout(professionalId: string, key: string): Promise
   return data as string
 }
 
+/** Custos REALIZADOS no período (Resumo): pagas pela data e valor do pagamento + lançamentos antigos pela própria data. Pendentes ficam de fora. */
 export async function fetchExpenses(shopId: string, de: string, ate: string): Promise<ExpenseRow[]> {
   const { data, error } = await supabase
-    .from("expenses").select("id, descricao, categoria, valor_centavos, data")
-    .eq("barbershop_id", shopId).gte("data", de).lte("data", ate).order("data", { ascending: false })
-  if (error) throw error
-  return data as ExpenseRow[]
+    .from("expenses").select("id, descricao, categoria, valor_centavos, data, situacao, pago_em, valor_pago_centavos")
+    .eq("barbershop_id", shopId)
+    .or(`and(situacao.eq.legado,data.gte.${de},data.lte.${ate}),and(situacao.eq.paga,pago_em.gte.${de},pago_em.lte.${ate})`)
+    .limit(1000)
+  if (error) {
+    if ((error as { code?: string }).code !== "42703") throw error
+    // banco ainda sem a migration 0029: todo custo é um lançamento antigo
+    const old = await supabase.from("expenses").select("id, descricao, categoria, valor_centavos, data")
+      .eq("barbershop_id", shopId).gte("data", de).lte("data", ate).order("data", { ascending: false })
+    if (old.error) throw old.error
+    return old.data as ExpenseRow[]
+  }
+  return (data as ExpenseEntry[])
+    .map((e) => ({ id: e.id, descricao: e.descricao, categoria: e.categoria, valor_centavos: e.valor_pago_centavos ?? e.valor_centavos, data: e.pago_em ?? e.data }))
+    .sort((a, b) => b.data.localeCompare(a.data))
 }
 
-export async function addExpense(input: { shopId: string; descricao: string; categoria: string; valor: number; data: string }): Promise<void> {
-  const { error } = await supabase.rpc("add_expense", {
-    p_barbershop_id: input.shopId, p_descricao: input.descricao, p_categoria: input.categoria, p_valor_centavos: input.valor, p_data: input.data,
+/** Conta da aba Despesas. `data` é o vencimento (nos lançamentos antigos, a data do custo). */
+export type ExpenseEntry = {
+  id: string; descricao: string; categoria: string; valor_centavos: number; data: string; situacao: ExpenseStatus
+  pago_em: string | null; valor_pago_centavos: number | null; forma: ExpenseForm | null; linha_digitavel: string | null; recurrence_id: string | null
+}
+export type ExpenseRecurrence = { id: string; descricao: string; categoria: string; valor_centavos: number; frequencia: ExpenseFrequency; inicio: string }
+
+/**
+ * Aba Despesas, um mês por vez: cria as contas recorrentes que faltam até o fim do mês e lê as contas com VENCIMENTO no mês
+ * (pendentes, pagas e lançamentos antigos), mais as recorrências ativas. Sem a migration 0030, usa a sincronização antiga (35 dias).
+ */
+export async function fetchExpenseBook(shopId: string, de: string, ate: string): Promise<{ entries: ExpenseEntry[]; recurrences: ExpenseRecurrence[] }> {
+  let sync = await supabase.rpc("sync_expense_recurrences", { p_barbershop_id: shopId, p_ate: ate })
+  if (sync.error?.code === "PGRST202") sync = await supabase.rpc("sync_expense_recurrences", { p_barbershop_id: shopId })
+  if (sync.error) throw sync.error
+  const [entries, recurrences] = await Promise.all([
+    supabase.from("expenses")
+      .select("id, descricao, categoria, valor_centavos, data, situacao, pago_em, valor_pago_centavos, forma, linha_digitavel, recurrence_id")
+      .eq("barbershop_id", shopId).gte("data", de).lte("data", ate)
+      .order("data").order("criado_em").limit(2000),
+    supabase.from("expense_recurrences").select("id, descricao, categoria, valor_centavos, frequencia, inicio")
+      .eq("barbershop_id", shopId).is("encerrada_em", null).order("criado_em"),
+  ])
+  if (entries.error) throw entries.error
+  if (recurrences.error) throw recurrences.error
+  return { entries: entries.data as ExpenseEntry[], recurrences: recurrences.data as ExpenseRecurrence[] }
+}
+
+export type ExpenseInput = { descricao: string; categoria: string; valor: number; vencimento: string; forma: ExpenseForm | null; linha: string | null }
+
+/** `id` nasce na tela: repetir a chamada depois de uma falha de rede não cria a despesa duas vezes. */
+export async function createExpense(input: ExpenseInput & { id: string; shopId: string; frequencia: ExpenseFrequency | null; pagoEm: string | null }): Promise<void> {
+  const { error } = await supabase.rpc("create_expense", {
+    p_id: input.id, p_barbershop_id: input.shopId, p_descricao: input.descricao, p_categoria: input.categoria, p_valor_centavos: input.valor,
+    p_vencimento: input.vencimento, p_forma: input.forma, p_linha_digitavel: input.linha, p_frequencia: input.frequencia,
+    p_pago_em: input.pagoEm, p_valor_pago_centavos: input.pagoEm ? input.valor : null,
   })
+  if (error) throw error
+}
+
+/** Várias despesas em UMA chamada e uma transação (tudo ou nada). Cada linha leva o próprio id: reenviar não duplica. Linha inválida: `invalid_expense_line:N`. */
+export async function createExpenses(shopId: string, items: (ExpenseInput & { id: string; frequencia: ExpenseFrequency | null; pagoEm: string | null })[]): Promise<void> {
+  const { error } = await supabase.rpc("create_expenses", {
+    p_barbershop_id: shopId,
+    p_items: items.map((i) => ({ id: i.id, descricao: i.descricao, categoria: i.categoria, valor_centavos: i.valor, vencimento: i.vencimento, forma: i.forma, linha_digitavel: i.linha, frequencia: i.frequencia, pago_em: i.pagoEm })),
+  })
+  if (error) throw error
+}
+
+/** Descrição e categoria de qualquer conta (inclusive paga ou lançamento antigo); não mexe em valor, datas nem pagamento. */
+export async function updateExpenseDetails(id: string, descricao: string, categoria: string): Promise<void> {
+  const { error } = await supabase.rpc("update_expense_details", { p_id: id, p_descricao: descricao, p_categoria: categoria })
+  if (error) throw error
+}
+
+/** Desfaz um pagamento lançado por engano: a conta volta a pendente e o razão recebe o lançamento compensatório. */
+export async function revertExpensePayment(id: string): Promise<void> {
+  const { error } = await supabase.rpc("revert_expense_payment", { p_id: id })
+  if (error) throw error
+}
+
+export type ExpenseEvent = { id: string; tipo: "pagamento" | "reversao"; pago_em: string; valor_centavos: number; forma: ExpenseForm | null; criado_em: string }
+
+/** Histórico de pagamentos e reversões de uma conta, do mais antigo para o mais recente. Banco sem a 0031: lista vazia. */
+export async function fetchExpenseEvents(expenseId: string): Promise<ExpenseEvent[]> {
+  const { data, error } = await supabase.from("expense_events").select("id, tipo, pago_em, valor_centavos, forma, criado_em").eq("expense_id", expenseId).order("criado_em")
+  if (error) {
+    if ((error as { code?: string }).code === "PGRST205") return []
+    throw error
+  }
+  return data as ExpenseEvent[]
+}
+
+export async function updateExpense(id: string, input: ExpenseInput): Promise<void> {
+  const { error } = await supabase.rpc("update_expense", {
+    p_id: id, p_descricao: input.descricao, p_categoria: input.categoria, p_valor_centavos: input.valor,
+    p_vencimento: input.vencimento, p_forma: input.forma, p_linha_digitavel: input.linha,
+  })
+  if (error) throw error
+}
+
+export async function payExpense(id: string, input: { pagoEm: string; valor: number; forma: ExpenseForm }): Promise<void> {
+  const { error } = await supabase.rpc("pay_expense", { p_id: id, p_pago_em: input.pagoEm, p_valor_pago_centavos: input.valor, p_forma: input.forma })
+  if (error) throw error
+}
+
+export async function deleteExpense(id: string): Promise<void> {
+  const { error } = await supabase.rpc("delete_expense", { p_id: id })
+  if (error) throw error
+}
+
+export async function endExpenseRecurrence(id: string): Promise<void> {
+  const { error } = await supabase.rpc("end_expense_recurrence", { p_id: id })
   if (error) throw error
 }
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { formatPrice } from "@/features/catalog/domain"
-import { describeRule, financeErrorMessage, formatCommissionStatus, monthRange, rangeOfMonth, parseMoney, parsePercent, paymentFormLabel, remainingToReceive } from "./domain"
+import { describeRule, expenseTotals, expenseView, financeErrorMessage, formatCommissionStatus, monthRange, rangeOfMonth, parseMoney, parsePercent, paymentFormLabel, remainingToReceive } from "./domain"
 
 describe("parseMoney", () => {
   it("converte texto em centavos inteiros", () => {
@@ -69,5 +69,40 @@ describe("rangeOfMonth", () => {
     expect(rangeOfMonth("2028-02")).toEqual({ de: "2028-02-01", ate: "2028-02-29" })
     expect(rangeOfMonth("2026-13")).toBeNull()
     expect(rangeOfMonth("")).toBeNull()
+  })
+})
+
+describe("despesas", () => {
+  const e = (situacao: "legado" | "pendente" | "paga", valor: number, data: string, pago_em: string | null = null, pago: number | null = null) => ({ situacao, valor_centavos: valor, data, pago_em, valor_pago_centavos: pago })
+
+  it("vencida é a pendente com vencimento anterior a hoje; vencer hoje ainda é pendente", () => {
+    expect(expenseView(e("pendente", 1, "2026-11-15"), "2026-11-16")).toBe("vencida")
+    expect(expenseView(e("pendente", 1, "2026-11-16"), "2026-11-16")).toBe("pendente")
+    expect(expenseView(e("paga", 1, "2026-11-01", "2026-11-20", 1), "2026-11-16")).toBe("paga")
+    expect(expenseView(e("legado", 1, "2026-11-01"), "2026-11-16")).toBe("legado")
+  })
+
+  it("totais do mês de vencimento: paga usa o valor efetivo mesmo paga em outro mês; antigo nunca vira pago; recorrente futura é previsão", () => {
+    const t = expenseTotals([
+      e("pendente", 30000, "2026-11-05"), // vencida
+      e("pendente", 10000, "2026-11-16"), // vence hoje: pendente, não vencida
+      { ...e("pendente", 5000, "2026-11-23"), recurrence_id: "r1" }, // recorrente futura: valor previsto
+      { ...e("pendente", 7000, "2026-11-10"), recurrence_id: "r1" }, // recorrente vencida: dívida, não previsão
+      e("paga", 20000, "2026-11-28", "2026-10-30", 20000), // paga antecipada, em outubro
+      e("paga", 9000, "2026-11-02", "2026-12-04", 9450), // paga atrasada, em dezembro, com juros
+      e("legado", 100000, "2026-11-02"),
+    ], "2026-11-16")
+    expect(t.falta).toEqual({ cents: 52000, count: 4 })
+    expect(t.vencidas).toEqual({ cents: 37000, count: 2 })
+    expect(t.previstas).toEqual({ cents: 5000, count: 1 })
+    expect(t.pagas).toEqual({ cents: 29450, count: 2 })
+    expect(t.antigas).toEqual({ cents: 100000, count: 1 })
+    expect(t.total).toEqual({ cents: 52000 + 29450 + 100000, count: 7 })
+    expect(expenseTotals([], "2026-11-16").total).toEqual({ cents: 0, count: 0 })
+  })
+
+  it("mensagens: falha de rede e conta já paga são explicadas", () => {
+    expect(financeErrorMessage(new TypeError("Failed to fetch"))).toMatch(/Sem conexão/)
+    expect(financeErrorMessage({ message: "expense_not_pending" })).toMatch(/já foi paga/)
   })
 })

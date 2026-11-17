@@ -100,7 +100,7 @@ export function SummaryTab({ shop, range }: { shop: MyBarbershop; range: Range }
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.55fr)_minmax(0,1fr)]">
         <Section
           title={mode === "receita" ? "Evolução da receita" : "Evolução dos custos"}
-          description="Receita já sem estornos; custos pela data do lançamento."
+          description="Receita já sem estornos; custos pela data do pagamento."
           action={<Segmented<Mode> label="Série do gráfico" value={mode} onChange={setMode} options={[{ value: "receita", label: "Receita" }, { value: "custo", label: "Custos" }]} />}
         >
           {failed ? <SectionFailed onRetry={retry} /> : !derived ? <SectionSkeleton label="Carregando evolução" /> : hasFlow ? <BarChart days={derived.days} series={mode} /> : (

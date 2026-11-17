@@ -1,12 +1,12 @@
-import { Banknote, CreditCard, QrCode, WalletCards } from "lucide-react"
+import { ArrowLeftRight, Banknote, Barcode, CreditCard, QrCode, WalletCards } from "lucide-react"
 import { OptionSelect } from "@/ui/option-select"
 import { PAYMENT_FORMS, paymentFormLabel, type PaymentForm } from "../domain"
 
-const ICONS = { pix: QrCode, dinheiro: Banknote, debito: CreditCard, credito: WalletCards } as const
+const ICONS = { pix: QrCode, dinheiro: Banknote, debito: CreditCard, credito: WalletCards, boleto: Barcode, transferencia: ArrowLeftRight } as const
 
 /** Ícone da forma de pagamento: PIX, dinheiro, débito e crédito sempre com o mesmo desenho. */
 export function PaymentFormIcon({ form, className = "h-4 w-4" }: { form: string; className?: string }) {
-  const Icon = ICONS[form as PaymentForm] ?? WalletCards
+  const Icon = ICONS[form as keyof typeof ICONS] ?? WalletCards
   return <Icon className={className} aria-hidden="true" />
 }
 

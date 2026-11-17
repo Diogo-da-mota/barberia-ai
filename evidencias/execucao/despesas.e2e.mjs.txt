@@ -1,0 +1,158 @@
+// Teste de navegador de /financeiro/despesas (Chrome real, rede do Supabase simulada): nova despesa, listas suspensas,
+// categoria nova, várias despesas, editar, pagar e reverter, em 1440px e 390px. Não grava nada em produção.
+// Uso: copiar para um diretório com `playwright-core` instalado, salvar como .mjs, trocar o import abaixo por
+//   import { chromium } from "playwright-core"
+// e rodar com o servidor local no ar:  node despesas.e2e.mjs <pasta-de-capturas>
+
+import { createRequire } from "node:module"
+const require = createRequire("/Users/diogomota/.npm/_npx/b234c773f454f454/node_modules/")
+const { chromium } = require("playwright-core")
+const BASE = "http://localhost:5173", OUT = process.argv[2]
+const b64 = (o) => Buffer.from(JSON.stringify(o)).toString("base64url")
+const exp = () => Math.floor(Date.now() / 1000) + 3600
+const USER = { id: "00000000-0000-4000-8000-000000000001", aud: "authenticated", role: "authenticated", email: "teste@example.test", app_metadata: {}, user_metadata: { full_name: "Usuária Teste" }, identities: [], created_at: new Date().toISOString() }
+const JWT = `${b64({ alg: "none" })}.${b64({ sub: USER.id, exp: exp(), role: "authenticated", amr: [{ method: "password", timestamp: Math.floor(Date.now() / 1000) }] })}.teste`
+const SESSION = { access_token: JWT, refresh_token: "teste", token_type: "bearer", expires_in: 3600, expires_at: exp(), user: USER }
+const SHOP = { id: "loja-1", nome: "Barbearia Fictícia", slug: "barbearia-ficticia", endereco: "Rua de Teste, 10", status: "ativo", fuso: "America/Sao_Paulo" }
+const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo" }).format(new Date())
+const d = (n) => new Date(Date.parse(today + "T12:00:00Z") + n * 864e5).toISOString().slice(0, 10)
+const conta = (id, descricao, categoria, valor, data, extra = {}) => ({ id, descricao, categoria, valor_centavos: valor, data, situacao: "pendente", pago_em: null, valor_pago_centavos: null, forma: null, linha_digitavel: null, recurrence_id: null, ...extra })
+async function open({ width = 1440, height = 900 } = {}) {
+  const browser = await chromium.launch({ channel: "chrome", headless: true })
+  const context = await browser.newContext({ viewport: { width, height }, hasTouch: width < 768 })
+  const page = await context.newPage()
+  const errors = [], calls = []
+  const state = { entries: [conta("d1", "Internet", "Internet", 9990, d(-3), { forma: "pix" }), conta("d2", "Energia elétrica", "Energia", 38000, d(0), { forma: "boleto", linha_digitavel: "34191.79001 01043.510047 91020.150008 5 90000000038000" }), conta("d3", "Aluguel", "Aluguel", 150000, d(-6), { situacao: "paga", pago_em: d(-6), valor_pago_centavos: 150000, forma: "pix", recurrence_id: "r1" })] }
+  page.on("pageerror", (e) => errors.push(e.message))
+  page.on("console", (m) => { if (m.type() === "error" && !/Failed to load resource/.test(m.text())) errors.push(m.text()) })
+  await context.addInitScript(({ s }) => { localStorage.setItem("barberia:theme", "dark"); localStorage.setItem("barberia-auth-painel", JSON.stringify(s)) }, { s: SESSION })
+  await context.route(/supabase\.co|cloudfront\.net/, async (route) => {
+    const req = route.request(), url = new URL(req.url()), p = url.pathname
+    const json = (b, st = 200) => route.fulfill({ status: st, contentType: "application/json", body: JSON.stringify(b) })
+    const body = () => { try { return JSON.parse(req.postData() ?? "{}") } catch { return {} } }
+    if (!url.hostname.includes("supabase")) return route.fulfill({ status: 404, body: "" })
+    if (p === "/auth/v1/user") return json(USER)
+    if (p.startsWith("/auth/")) return json(SESSION)
+    if (p.includes("/rpc/")) {
+      const fn = p.split("/rpc/")[1]; const b = body(); calls.push({ fn, body: b })
+      if (fn === "finance_report") return json([{ previsto_centavos: 0, recebido_centavos: 0, custos_centavos: 150000, comissoes_provisionadas_centavos: 0, comissoes_liquidadas_centavos: 0, resultado_estimado_centavos: -150000, despesas_a_pagar_centavos: 47990 }])
+      if (fn === "create_expense") { state.entries.push(conta(b.p_id, b.p_descricao, b.p_categoria, b.p_valor_centavos, b.p_vencimento, { forma: b.p_forma, situacao: b.p_pago_em ? "paga" : "pendente", pago_em: b.p_pago_em, valor_pago_centavos: b.p_pago_em ? b.p_valor_centavos : null })); return json(b.p_id) }
+      if (fn === "create_expenses") { for (const i of b.p_items) state.entries.push(conta(i.id, i.descricao, i.categoria, i.valor_centavos, i.vencimento, { forma: i.forma })); return json(b.p_items.length) }
+      if (fn === "update_expense") { const e = state.entries.find((x) => x.id === b.p_id); Object.assign(e, { descricao: b.p_descricao, categoria: b.p_categoria, valor_centavos: b.p_valor_centavos, data: b.p_vencimento, forma: b.p_forma }); return json(null) }
+      if (fn === "pay_expense") { const e = state.entries.find((x) => x.id === b.p_id); Object.assign(e, { situacao: "paga", pago_em: b.p_pago_em, valor_pago_centavos: b.p_valor_pago_centavos, forma: b.p_forma }); return json(null) }
+      if (fn === "revert_expense_payment") { const e = state.entries.find((x) => x.id === b.p_id); Object.assign(e, { situacao: "pendente", pago_em: null, valor_pago_centavos: null }); return json(null) }
+      return json(fn === "sync_expense_recurrences" ? 0 : null)
+    }
+    const t = p.replace("/rest/v1/", "")
+    if (t.startsWith("memberships")) return json([{ papel: "proprietario", barbershops: SHOP }])
+    if (t.startsWith("expense_recurrences")) return json([{ id: "r1", descricao: "Aluguel", categoria: "Aluguel", valor_centavos: 150000, frequencia: "mensal", inicio: d(-6) }])
+    if (t.startsWith("expense_events")) return json([{ id: "ev1", tipo: "pagamento", pago_em: d(-6), valor_centavos: 150000, forma: "pix", criado_em: new Date().toISOString() }])
+    if (t.startsWith("expenses")) return json(state.entries)
+    return json(req.headers()["accept"]?.includes("vnd.pgrst.object") ? null : [])
+  })
+  return { browser, page, errors, calls, state }
+}
+const shot = (page, name) => page.screenshot({ path: `${OUT}/${name}.png` })
+
+let ok = 0, bad = 0
+const check = (name, pass, detail = "") => { pass ? ok++ : bad++; console.log(`${pass ? "PASS" : "FAIL"}  ${name}${detail ? `  (${detail})` : ""}`) }
+const pick = async (page, scope, label, option) => { await scope.getByLabel(label).click(); await page.getByRole("option", { name: option, exact: true }).click() }
+const overflow = (page) => page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1)
+
+for (const [w, h] of [[1440, 900], [390, 844]]) {
+  const tag = `${w}px`
+  const { browser, page, errors, calls, state } = await open({ width: w, height: h })
+  const last = (fn) => calls.filter((c) => c.fn === fn).at(-1)?.body
+  await page.goto("http://localhost:5173/financeiro/despesas", { waitUntil: "load" })
+  await page.getByRole("button", { name: "Nova despesa" }).waitFor({ timeout: 15000 })
+  check(`${tag} lista: abre em /financeiro/despesas com a aba Despesas`, page.url().endsWith("/financeiro/despesas") && await page.getByRole("tab", { name: "Despesas" }).getAttribute("aria-selected") === "true")
+  check(`${tag} lista: sem rolagem horizontal`, !(await overflow(page)))
+  await shot(page, `${w}-1-lista`)
+
+  // ---- nova despesa: erro some ao corrigir, todas as listas trocam ----
+  await page.getByRole("button", { name: "Nova despesa" }).click()
+  let dlg = page.getByRole("dialog")
+  await dlg.getByRole("button", { name: "Salvar despesa" }).click()
+  check(`${tag} nova: avisos nos campos obrigatórios`, await dlg.getByText("Informe a categoria.").isVisible() && await dlg.getByText("Informe um valor maior que zero.").isVisible())
+  await dlg.getByLabel(/Descrição/).fill("Material de escritório")
+  await pick(page, dlg, /Categoria/, "Produtos")
+  await dlg.getByLabel(/Valor/).fill("12000")
+  check(`${tag} nova: avisos somem ao corrigir cada campo`, !(await dlg.getByText("Informe a categoria.").isVisible()) && !(await dlg.getByText("Informe um valor maior que zero.").isVisible()) && !(await dlg.getByText(/Informe a descrição/).isVisible()))
+  await pick(page, dlg, /Categoria/, "Internet")
+  check(`${tag} nova: categoria já escolhida pode ser trocada`, (await dlg.getByLabel(/Categoria/).innerText()).trim() === "Internet")
+  await pick(page, dlg, "Repete", "Todo mês")
+  check(`${tag} nova: Repete troca e trava Situação em Pendente`, (await dlg.getByLabel("Repete").innerText()).trim() === "Todo mês" && await dlg.getByLabel("Situação").isDisabled())
+  await pick(page, dlg, "Repete", "Não repete")
+  await pick(page, dlg, "Situação", "Já paga")
+  check(`${tag} nova: Situação "Já paga" pede forma e data do pagamento`, await dlg.getByLabel(/Data do pagamento/).isVisible() && await dlg.getByLabel(/Forma de pagamento/).isVisible())
+  await pick(page, dlg, "Situação", "Pendente")
+  await pick(page, dlg, "Forma prevista", "Boleto")
+  check(`${tag} nova: Forma prevista troca e boleto mostra a linha digitável`, (await dlg.getByLabel("Forma prevista").innerText()).trim() === "Boleto" && await dlg.getByLabel(/Linha digitável/).isVisible())
+  await pick(page, dlg, "Forma prevista", "PIX")
+  // categoria nova
+  await pick(page, dlg, /Categoria/, "Outra categoria…")
+  await dlg.getByLabel(/Categoria/).fill("Papelaria")
+  await shot(page, `${w}-2-nova`)
+  await dlg.getByRole("button", { name: "Salvar despesa" }).click()
+  await dlg.waitFor({ state: "hidden" })
+  const c = last("create_expense")
+  check(`${tag} nova: grava o que foi escolhido`, c?.p_descricao === "Material de escritório" && c.p_categoria === "Papelaria" && c.p_valor_centavos === 12000 && c.p_forma === "pix" && c.p_frequencia === null && c.p_pago_em === null, JSON.stringify(c))
+  check(`${tag} nova: aparece na lista`, await page.getByRole("button", { name: /Material de escritório/ }).isVisible())
+
+  // ---- várias despesas ----
+  await page.getByRole("button", { name: "Nova despesa" }).click()
+  dlg = page.getByRole("dialog")
+  await dlg.getByLabel(/Descrição/).fill("Aluguel da sala")
+  await pick(page, dlg, /Categoria/, "Aluguel")
+  await dlg.getByLabel(/Valor/).fill("90000")
+  await dlg.getByRole("button", { name: "Adicionar outra despesa" }).click()
+  await dlg.getByRole("button", { name: "Salvar todas (2)" }).click()
+  check(`${tag} várias: linha 2 inválida destacada e nada enviado`, await dlg.getByRole("group", { name: "Despesa 2" }).getAttribute("aria-invalid") === "true" && !last("create_expenses"))
+  const l2 = dlg.getByRole("group", { name: "Despesa 2" })
+  await l2.getByLabel(/Descrição/).fill("Água")
+  await pick(page, l2, /Categoria/, "Água")
+  await l2.getByLabel(/Valor/).fill("11000")
+  await pick(page, l2, "Forma prevista", "Boleto")
+  check(`${tag} várias: destaque some ao corrigir e o total soma as duas`, await l2.getAttribute("aria-invalid") === null && /1\.010,00/.test(await dlg.getByText(/2 despesas ·/).innerText()))
+  check(`${tag} várias: pop-up sem rolagem horizontal`, !(await dlg.evaluate((el) => el.scrollWidth > el.clientWidth + 1)))
+  await shot(page, `${w}-3-varias`)
+  await dlg.getByRole("button", { name: "Salvar todas (2)" }).click()
+  await dlg.waitFor({ state: "hidden" })
+  const lote = last("create_expenses")
+  check(`${tag} várias: UMA chamada com as duas linhas`, calls.filter((x) => x.fn === "create_expenses").length === 1 && lote.p_items.length === 2 && lote.p_items[1].forma === "boleto" && lote.p_items[1].valor_centavos === 11000, JSON.stringify(lote?.p_items?.map((i) => [i.descricao, i.valor_centavos, i.forma])))
+
+  // ---- editar pendente ----
+  await page.getByRole("button", { name: /Internet/ }).first().click()
+  dlg = page.getByRole("dialog")
+  await dlg.getByRole("button", { name: "Editar" }).click()
+  dlg = page.getByRole("dialog")
+  check(`${tag} editar: abre preenchido`, await dlg.getByLabel(/Descrição/).inputValue() === "Internet" && (await dlg.getByLabel(/Categoria/).innerText()).trim() === "Internet" && await dlg.getByLabel(/Valor/).inputValue() === "99,90")
+  await dlg.getByLabel(/Valor/).fill("10990")
+  await pick(page, dlg, /Categoria/, "Assinaturas")
+  await pick(page, dlg, "Forma prevista", "Crédito")
+  await shot(page, `${w}-4-editar`)
+  await dlg.getByRole("button", { name: "Salvar alterações" }).click()
+  await dlg.waitFor({ state: "hidden" })
+  const u = last("update_expense")
+  check(`${tag} editar: atualiza a mesma conta`, u?.p_id === "d1" && u.p_valor_centavos === 10990 && u.p_categoria === "Assinaturas" && u.p_forma === "credito", JSON.stringify(u))
+
+  // ---- pagar e reverter ----
+  await page.getByRole("button", { name: /Energia elétrica/ }).click()
+  await page.getByRole("dialog").getByRole("button", { name: "Marcar como paga" }).click()
+  dlg = page.getByRole("dialog")
+  await pick(page, dlg, /Forma de pagamento/, "PIX")
+  await dlg.getByRole("button", { name: "Confirmar pagamento" }).click()
+  await dlg.waitFor({ state: "hidden" })
+  check(`${tag} pagar: registra valor e forma`, last("pay_expense")?.p_id === "d2" && last("pay_expense").p_forma === "pix" && state.entries.find((e) => e.id === "d2").situacao === "paga")
+  await page.getByRole("button", { name: /Energia elétrica/ }).click()
+  dlg = page.getByRole("dialog")
+  await dlg.getByRole("button", { name: "Reverter pagamento" }).click()
+  await shot(page, `${w}-5-reverter`)
+  await dlg.getByRole("button", { name: "Confirmar reversão" }).click()
+  await dlg.waitFor({ state: "hidden" })
+  check(`${tag} reverter: conta volta a pendente`, last("revert_expense_payment")?.p_id === "d2" && state.entries.find((e) => e.id === "d2").situacao === "pendente")
+  await shot(page, `${w}-6-final`)
+  check(`${tag} sem erros de console`, errors.length === 0, errors.slice(0, 3).join(" || "))
+  await browser.close()
+}
+console.log(`\n${ok} PASS, ${bad} FAIL`)
