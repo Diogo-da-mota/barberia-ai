@@ -96,7 +96,7 @@ export function ShopGate({ gate, children }: ShopGateProps) {
           description="Serviços e equipe pertencem a uma barbearia."
           action={
             <Button asChild className="h-11 md:h-10">
-              <Link to="/dashboard/barbearias/nova">Criar barbearia</Link>
+              <Link to="/barbearias/nova">Criar barbearia</Link>
             </Button>
           }
         />

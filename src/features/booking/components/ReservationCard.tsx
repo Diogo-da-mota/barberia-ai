@@ -3,7 +3,7 @@ import { ProfessionalPhoto } from "@/features/catalog/components/ProfessionalPho
 import { cn } from "@/lib/utils"
 
 /**
- * Card de reserva, único para a área do cliente (/minhas-reservas) e para a agenda da equipe (/dashboard/agendamentos):
+ * Card de reserva, único para a área do cliente (/minhas-reservas) e para a agenda da equipe (/agendamentos):
  * foto QUADRADA do profissional rente às bordas de cima, de baixo e da esquerda, dados no meio e ações à direita
  * (embaixo no celular). `photo` troca a foto (ex.: cadeado de um bloqueio).
  */

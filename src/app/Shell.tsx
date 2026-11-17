@@ -37,27 +37,27 @@ import { LaraLauncher } from "@/features/settings/components/LaraLauncher"
 
 const DESTINATIONS = [
   { href: "/dashboard", label: "Início", shortLabel: "Início", icon: Home },
-  { href: "/dashboard/agendamentos", label: "Agendamentos", shortLabel: "Agenda", icon: Calendar },
-  { href: "/dashboard/servicos", label: "Serviços", shortLabel: "Serviços", icon: ListChecks },
-  { href: "/dashboard/equipe", label: "Equipe", shortLabel: "Equipe", icon: Users },
-  { href: "/dashboard/mais", label: "Mais", shortLabel: "Mais", icon: MoreHorizontal },
+  { href: "/agendamentos", label: "Agendamentos", shortLabel: "Agenda", icon: Calendar },
+  { href: "/servicos", label: "Serviços", shortLabel: "Serviços", icon: ListChecks },
+  { href: "/equipe", label: "Equipe", shortLabel: "Equipe", icon: Users },
+  { href: "/mais", label: "Mais", shortLabel: "Mais", icon: MoreHorizontal },
 ]
 
 type Destination = { href: string; label: string; icon: typeof Home }
 
 const ALL = {
   inicio: { href: "/dashboard", label: "Início", icon: Home },
-  agenda: { href: "/dashboard/agendamentos", label: "Agendamentos", icon: Calendar },
-  clientes: { href: "/dashboard/clientes", label: "Clientes", icon: Contact },
-  servicos: { href: "/dashboard/servicos", label: "Serviços", icon: ListChecks },
-  equipe: { href: "/dashboard/equipe", label: "Equipe", icon: Users },
-  mensagens: { href: "/dashboard/mensagens", label: "Mensagens", icon: MessageSquare },
-  site: { href: "/dashboard/site", label: "Meu site", icon: Palette },
-  configuracoes: { href: "/dashboard/configuracoes", label: "Configurações", icon: Settings },
-  financeiro: { href: "/dashboard/financeiro", label: "Financeiro", icon: Wallet },
-  analises: { href: "/dashboard/analises", label: "Análises", icon: BarChart3 },
+  agenda: { href: "/agendamentos", label: "Agendamentos", icon: Calendar },
+  clientes: { href: "/clientes", label: "Clientes", icon: Contact },
+  servicos: { href: "/servicos", label: "Serviços", icon: ListChecks },
+  equipe: { href: "/equipe", label: "Equipe", icon: Users },
+  mensagens: { href: "/mensagens", label: "Mensagens", icon: MessageSquare },
+  site: { href: "/site", label: "Meu site", icon: Palette },
+  configuracoes: { href: "/configuracoes", label: "Configurações", icon: Settings },
+  financeiro: { href: "/financeiro", label: "Financeiro", icon: Wallet },
+  analises: { href: "/analises", label: "Análises", icon: BarChart3 },
   reservas: { href: "/minhas-reservas", label: "Minhas reservas", icon: CalendarCheck },
-  mais: { href: "/dashboard/mais", label: "Mais", icon: MoreHorizontal },
+  mais: { href: "/mais", label: "Mais", icon: MoreHorizontal },
 } satisfies Record<string, Destination>
 
 type ShellProps = {
@@ -221,7 +221,7 @@ export function Shell({ children, hero }: ShellProps) {
               </Button>
             )}
             <Link
-              to="/dashboard/mais"
+              to="/mais"
               aria-label={`Conta de ${firstName}`}
               className="hidden h-11 items-center gap-2.5 rounded-xl border border-border bg-card/80 py-1 pr-3.5 pl-1.5 backdrop-blur-md transition-colors hover:bg-card md:flex"
             >
@@ -305,7 +305,7 @@ export function Shell({ children, hero }: ShellProps) {
       </nav>}
 
       {/* Lara: botão flutuante da gestão em todo o painel (em Configurações › Assistente o chat já está na tela) */}
-      {area === "painel" && shop && gate.canManage && pathname !== "/dashboard/configuracoes" && <LaraLauncher shopId={shop.id} />}
+      {area === "painel" && shop && gate.canManage && pathname !== "/configuracoes" && <LaraLauncher shopId={shop.id} />}
     </div>
   )
 }

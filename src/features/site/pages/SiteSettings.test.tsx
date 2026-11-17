@@ -28,7 +28,7 @@ import { SiteSettings } from "./SiteSettings"
 
 const profile = (extra: Record<string, unknown> = {}) => ({ descricao: "Cortes clássicos.", cor_destaque: "verde", endereco: "Rua A, 1", telefone: "11999990000", slug: "barbearia", ...extra })
 
-function setup(p: Record<string, unknown> = { template: "urbano" }, path = "/dashboard/site") {
+function setup(p: Record<string, unknown> = { template: "urbano" }, path = "/site") {
   api.fetchSiteProfile.mockResolvedValue(profile(p))
   api.fetchMedia.mockResolvedValue([{ id: "m1", kind: "capa", storage_path: "loja-1/capa.jpg", mime: "image/jpeg", tamanho_bytes: 10, criado_em: "2026-01-01" }])
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -43,7 +43,7 @@ beforeEach(() => { vi.clearAllMocks(); gate.canManage = true; gate.papel = "prop
 const menuPreview = () => screen.getByRole("img", { name: "Prévia da foto do menu lateral" })
 const heroPreview = (device: string) => screen.getByRole("img", { name: `Prévia do topo do Início no ${device}` })
 
-describe("/dashboard/site", () => {
+describe("/site", () => {
   it("mostra as seções do editor, os cinco templates e a prévia do modelo salvo", async () => {
     setup({ template: "moderno" })
     expect(await screen.findByRole("heading", { level: 1, name: "Meu site" })).toBeInTheDocument()
@@ -126,7 +126,7 @@ describe("/dashboard/site", () => {
   })
 
   it("?aba=fotos mostra só as fotos do painel (menu lateral e topo do Início) com a prévia real, e nada do site público", async () => {
-    setup({ template: "urbano" }, "/dashboard/site?aba=fotos")
+    setup({ template: "urbano" }, "/site?aba=fotos")
     expect(await screen.findByRole("heading", { name: "Menu lateral" })).toBeInTheDocument()
     for (const name of ["Login do cliente", "Topo do Início", "Agendamentos", "Serviços", "Financeiro"]) expect(screen.getByRole("heading", { name })).toBeInTheDocument()
     expect(screen.getByRole("tab", { name: "Fotos" })).toHaveAttribute("aria-selected", "true")
@@ -166,7 +166,7 @@ describe("/dashboard/site", () => {
   it("com foto própria, a prévia mostra a foto da barbearia e restaurar volta só aquela foto para a padrão", async () => {
     api.fetchPanelPhotos.mockResolvedValue({ menu: null, inicio: "https://x.test/loja-1/painel-inicio.jpg?v=1" })
     api.removePanelPhoto.mockResolvedValue(undefined)
-    setup(undefined, "/dashboard/site?aba=fotos")
+    setup(undefined, "/site?aba=fotos")
     const topo = await screen.findByRole("region", { name: "Topo do Início" })
     expect(await within(topo).findByText("Sua foto")).toBeInTheDocument()
     expect(heroPreview("computador").querySelector("img")).toHaveAttribute("src", "https://x.test/loja-1/painel-inicio.jpg?v=1")
@@ -177,7 +177,7 @@ describe("/dashboard/site", () => {
   })
 
   it("trocar foto recusa arquivo inválido sem enviar e abre o ajuste (zoom e posição) na medida daquela foto", async () => {
-    setup(undefined, "/dashboard/site?aba=fotos")
+    setup(undefined, "/site?aba=fotos")
     const topo = await screen.findByRole("region", { name: "Topo do Início" })
     const input = within(topo).getByLabelText("Trocar foto")
     fireEvent.change(input, { target: { files: [new File(["<svg/>"], "x.svg", { type: "image/svg+xml" })] } })

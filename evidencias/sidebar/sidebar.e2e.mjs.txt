@@ -53,7 +53,7 @@ const ow = (page) => page.evaluate(() => document.documentElement.scrollWidth - 
   await page.getByRole("link", { name: "Clientes" }).first().waitFor()
   const l = await labels(page)
   check("proprietário: sidebar na ordem esperada", JSON.stringify(l) === JSON.stringify(["Início", "Agendamentos", "Clientes", "Serviços", "Equipe", "Horários", "Minhas reservas", "Página pública", "Mais"]), l.join(" | "))
-  for (const [nome, url, h1] of [["Agendamentos", "/dashboard/agendamentos", "Agendamentos"], ["Clientes", "/dashboard/clientes", "Clientes"], ["Serviços", "/dashboard/servicos", "Serviços"], ["Equipe", "/dashboard/equipe", "Equipe"], ["Horários", "/dashboard/horarios", "Horários de atendimento"], ["Mais", "/dashboard/mais", "Mais"], ["Início", "/dashboard", null]]) {
+  for (const [nome, url, h1] of [["Agendamentos", "/agendamentos", "Agendamentos"], ["Clientes", "/clientes", "Clientes"], ["Serviços", "/servicos", "Serviços"], ["Equipe", "/equipe", "Equipe"], ["Horários", "/horarios", "Horários de atendimento"], ["Mais", "/mais", "Mais"], ["Início", "/dashboard", null]]) {
     await page.getByRole("navigation", { name: "Navegação principal" }).first().getByRole("link", { name: nome, exact: true }).click()
     await page.waitForURL(BASE + url)
     if (h1) await page.getByRole("heading", { level: 1, name: h1 }).waitFor()

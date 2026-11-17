@@ -17,8 +17,8 @@ describe("endereços públicos sem /e/", () => {
     for (const slug of ["barbearia-do-tico", "estilo-e-cia", "dashboard-barber", "meu-site"]) expect(isReservedSlug(slug), slug).toBe(false)
   })
 
-  it("a lista no navegador é a mesma do banco (migration 0014): sem deriva", () => {
-    const sql = readFileSync("supabase/migrations/0014_slugs_reservados.sql", "utf8")
+  it("a lista no navegador é a mesma do banco (migration 0032, que substitui a da 0014): sem deriva", () => {
+    const sql = readFileSync("supabase/migrations/0032_slugs_painel.sql", "utf8")
     const array = /array\[([^\]]+)\]/.exec(sql)![1]
     const inSql = [...array.matchAll(/'([^']+)'/g)].map((m) => m[1]).sort()
     expect(inSql).toEqual([...RESERVED_SLUGS].sort())

@@ -1,5 +1,5 @@
 import { useState } from "react"
-import { useSearchParams } from "react-router-dom"
+import { usePathTab } from "@/lib/pathTab"
 import { MessageSquare } from "lucide-react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { CatalogFrame, ShopGate } from "@/features/catalog/components/CatalogFrame"
@@ -21,16 +21,13 @@ import { NotificationsPanel } from "../components/NotificationsPanel"
 import { eventLabel, matchesFilter, type StatusFilter } from "../domain"
 
 const TABS = [{ value: "mensagens", label: "Mensagens" }, { value: "notificacoes", label: "Notificações" }] as const
-type TabId = (typeof TABS)[number]["value"]
-const isTab = (v: string | null): v is TabId => TABS.some((t) => t.value === v)
+const TAB_IDS = TABS.map((t) => t.value)
 const DESCRIPTION = "Acompanhe confirmações, avisos e respostas dos seus clientes."
 
 /** Central de mensagens: a aba Mensagens (fila, envios, respostas) e a aba Notificações (o que é enviado, canais e consentimento). */
 export function Messages() {
   const gate = useActiveBarbershop()
-  const [params, setParams] = useSearchParams()
-  const tab: TabId = isTab(params.get("aba")) ? (params.get("aba") as TabId) : "mensagens"
-  const setTab = (value: string) => setParams((cur) => { const next = new URLSearchParams(cur); next.set("aba", value); return next }, { replace: true })
+  const [tab, setTab] = usePathTab("/mensagens", TAB_IDS)
   const manager = gate.state === "ready" && gate.canManage
   return (
     <Tabs value={tab} onValueChange={setTab} className="contents">

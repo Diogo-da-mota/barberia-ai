@@ -67,9 +67,9 @@ describe("tela inicial: composição com a fotografia de fundo", () => {
 describe("ações rápidas: só atalhos para telas que existem", () => {
   it("gestão: agenda, serviços, equipe e o site público em nova aba", () => {
     render(<MemoryRouter><QuickActions manager siteSlug="loja" /></MemoryRouter>)
-    expect(screen.getByRole("link", { name: /Ver agenda/ })).toHaveAttribute("href", "/dashboard/agendamentos")
-    expect(screen.getByRole("link", { name: /Novo serviço/ })).toHaveAttribute("href", "/dashboard/servicos")
-    expect(screen.getByRole("link", { name: /Equipe/ })).toHaveAttribute("href", "/dashboard/equipe")
+    expect(screen.getByRole("link", { name: /Ver agenda/ })).toHaveAttribute("href", "/agendamentos")
+    expect(screen.getByRole("link", { name: /Novo serviço/ })).toHaveAttribute("href", "/servicos")
+    expect(screen.getByRole("link", { name: /Equipe/ })).toHaveAttribute("href", "/equipe")
     const site = screen.getByRole("link", { name: /Ver meu site/ })
     expect(site).toHaveAttribute("href", "/loja")
     expect(site).toHaveAttribute("target", "_blank")

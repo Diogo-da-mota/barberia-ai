@@ -22,7 +22,7 @@ import { Messages } from "./Messages"
 const booking = { id: "b1", barbershop_id: "loja-1", service_id: "s1", professional_id: "p1", servico_nome: "Corte", cliente_nome: "Maria Souza", cliente_whatsapp: "11912345678", preco_centavos: 6000, inicio: "2099-01-10T12:00:00.000Z", fim: "2099-01-10T12:40:00.000Z", status: "confirmado", professionals: { nome: "Ana" } }
 const row = (id: string, nome: string) => ({ id, tipo: "reserva_criada", canal: "whatsapp", destino: "11912345678", status: "bloqueado", tentativas: 0, max_tentativas: 5, ultimo_erro: null, criado_em: "2099-01-01T12:00:00.000Z", bookings: { ...booking, cliente_nome: nome } })
 
-function open(path = "/dashboard/mensagens") {
+function open(path = "/mensagens") {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   render(<ThemeProvider><QueryClientProvider client={client}><MemoryRouter initialEntries={[path]}><Messages /></MemoryRouter></QueryClientProvider></ThemeProvider>)
 }
@@ -177,7 +177,7 @@ describe("abas da Central", () => {
   })
 
   it("?aba=notificacoes abre a aba Notificações com o conteúdo vindo de Mais, sem duplicar o que está em Mensagens", async () => {
-    open("/dashboard/mensagens?aba=notificacoes")
+    open("/mensagens?aba=notificacoes")
     expect(await screen.findByRole("heading", { name: "Mensagens ao cliente" })).toBeInTheDocument()
     expect(screen.getByRole("tab", { name: "Notificações" })).toHaveAttribute("aria-selected", "true")
     expect(screen.queryByText("Automático")).not.toBeInTheDocument() // chaves no lugar do rótulo
@@ -209,7 +209,7 @@ describe("abas da Central", () => {
 
   it("canal não configurado nunca aparece como ativo; canal ativo aparece como ativo", async () => {
     m.fetchIntegrations.mockResolvedValue([])
-    open("/dashboard/mensagens?aba=notificacoes")
+    open("/mensagens?aba=notificacoes")
     expect(await screen.findByText("Inativo")).toBeInTheDocument()
     expect(screen.queryByText("Ativo")).not.toBeInTheDocument()
     expect(screen.getByText(/ficam bloqueados|permanecem bloqueados/)).toBeInTheDocument()
@@ -217,7 +217,7 @@ describe("abas da Central", () => {
 
   it("com o canal ativo o estado é o mesmo nas duas abas (uma definição só)", async () => {
     m.fetchIntegrations.mockResolvedValue([{ provider: "whatsapp", status: "ativo" }])
-    open("/dashboard/mensagens?aba=notificacoes")
+    open("/mensagens?aba=notificacoes")
     expect(await screen.findByText("Ativo")).toBeInTheDocument()
     expect(screen.getByText("Os avisos autorizados pelos clientes são enviados automaticamente.")).toBeInTheDocument()
   })

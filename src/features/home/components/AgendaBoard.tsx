@@ -46,7 +46,7 @@ export function AgendaBoard({ customerOnly, rows, tz, day }: AgendaBoardProps) {
           </button>
         ) : (
           <Link
-            to={customerOnly ? "/minhas-reservas" : "/dashboard/agendamentos"}
+            to={customerOnly ? "/minhas-reservas" : "/agendamentos"}
             className="inline-flex min-h-11 shrink-0 items-center gap-1 rounded-md text-sm font-medium text-primary hover:underline md:min-h-9"
           >
             Ver agenda

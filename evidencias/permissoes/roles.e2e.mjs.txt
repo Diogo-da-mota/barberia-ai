@@ -47,7 +47,7 @@ const count = (page, role, name) => page.getByRole(role, { name }).count()
 for (const papel of (process.env.PAPEIS ?? "proprietario,gerente,barbeiro,cliente").split(",")) {
   const { page, context, errors } = await open(papel)
   // Agenda
-  await page.goto(BASE + "/dashboard/agendamentos", { waitUntil: "load" })
+  await page.goto(BASE + "/agendamentos", { waitUntil: "load" })
   if (papel === "cliente") {
     await page.getByText("Crie sua barbearia primeiro").waitFor()
     check(`${papel}: não acessa a agenda da equipe`, true)
@@ -57,18 +57,18 @@ for (const papel of (process.env.PAPEIS ?? "proprietario,gerente,barbeiro,client
     check(`${papel}: ${manage ? "vê Cancelar e Bloquear horário" : "só conclui e marca falta"}`, (await count(page, "button", /Cancelar reserva de/)) === (manage ? 1 : 0) && (await count(page, "button", "Bloquear horário")) === (manage ? 1 : 0) && (await count(page, "button", "Concluir")) === 1 && (await count(page, "button", "Faltou")) === 1)
   }
   // Equipe
-  await page.goto(BASE + "/dashboard/equipe", { waitUntil: "load" })
+  await page.goto(BASE + "/equipe", { waitUntil: "load" })
   if (papel === "cliente") await page.getByText("Crie sua barbearia primeiro").waitFor()
   else await page.getByText("Ana").first().waitFor()
   check(`${papel}: ${papel === "proprietario" || papel === "gerente" ? "edita a equipe" : "não edita a equipe"}`, (await count(page, "button", "Novo profissional")) + (await count(page, "button", "Editar Ana")) === (papel === "proprietario" || papel === "gerente" ? 1 : 0) || (papel === "proprietario" || papel === "gerente") && (await count(page, "button", "Editar Ana")) === 1)
   // Horários
-  await page.goto(BASE + "/dashboard/horarios", { waitUntil: "load" })
+  await page.goto(BASE + "/horarios", { waitUntil: "load" })
   await page.getByRole("heading", { level: 1 }).waitFor()
   await page.waitForTimeout(300)
   const editsHours = (await page.getByRole("button", { name: "Salvar horários" }).count()) === 1
   check(`${papel}: ${papel === "proprietario" || papel === "gerente" ? "edita horários" : "não edita horários"}`, editsHours === (papel === "proprietario" || papel === "gerente"))
   // Mais (convites)
-  await page.goto(BASE + "/dashboard/mais", { waitUntil: "load" })
+  await page.goto(BASE + "/mais", { waitUntil: "load" })
   await page.getByRole("link", { name: /Minhas reservas/ }).waitFor()
   if (papel === "proprietario" || papel === "gerente") await page.getByRole("button", { name: "Gerar link do convite" }).waitFor()
   else await page.getByText("Seu papel").waitFor()
@@ -89,7 +89,7 @@ for (const papel of (process.env.PAPEIS ?? "proprietario,gerente,barbeiro,client
 // Visões da agenda e responsividade
 for (const [w, h] of (process.env.PAPEIS ? [] : [[390, 844], [768, 1024], [1440, 900]])) {
   const { page, context } = await open("proprietario", w, h)
-  await page.goto(BASE + "/dashboard/agendamentos", { waitUntil: "load" })
+  await page.goto(BASE + "/agendamentos", { waitUntil: "load" })
   await page.getByText("Cliente Um").waitFor()
   await page.getByRole("button", { name: "Semana" }).click()
   await page.getByRole("region", { name: /\d/ }).first().waitFor()

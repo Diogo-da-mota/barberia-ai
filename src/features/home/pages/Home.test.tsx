@@ -164,6 +164,6 @@ describe("Home", () => {
 
     const board = await screen.findByRole("region", { name: "Próximos atendimentos" })
     expect(within(board).getByText("Nenhum atendimento agendado")).toBeInTheDocument()
-    expect(within(board).getByRole("link", { name: /Ver agenda/ })).toHaveAttribute("href", "/dashboard/agendamentos")
+    expect(within(board).getByRole("link", { name: /Ver agenda/ })).toHaveAttribute("href", "/agendamentos")
   })
 })

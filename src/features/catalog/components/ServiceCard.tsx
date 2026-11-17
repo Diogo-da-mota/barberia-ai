@@ -5,7 +5,7 @@ import { ImageCarousel } from "@/ui/carousel"
 import { formatDuration, formatPrice, type Service } from "../domain"
 
 /**
- * Card de serviço. É ÚNICO: o painel (/dashboard/servicos) e a página pública (/:slug) usam este componente,
+ * Card de serviço. É ÚNICO: o painel (/servicos) e a página pública (/:slug) usam este componente,
  * então qualquer mudança de visual vale para as duas telas. Só mudam as ações:
  *  - `action` (página pública): o botão Reservar, ao lado do preço (quebra de linha em vez de sobrepor);
  *  - `side` (painel): coluna na borda direita, com o lápis em cima e a lixeira embaixo.

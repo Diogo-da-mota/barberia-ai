@@ -8,7 +8,7 @@ import { AiKeyCard } from "../components/AiKeyCard"
 import { AssistantChat } from "../components/AssistantChat"
 import { LaraInstructionsCard } from "../components/LaraInstructionsCard"
 
-// snip: uma aba só, sem ?aba=; ler a aba da URL (como em Mensagens) quando entrar a segunda.
+// snip: uma aba só; quando entrar a segunda, usar usePathTab("/configuracoes", …) como em Mensagens.
 const TABS = [{ value: "assistente", label: "Assistente" }] as const
 const DESCRIPTION = "Ajustes da barbearia que valem para o sistema inteiro."
 

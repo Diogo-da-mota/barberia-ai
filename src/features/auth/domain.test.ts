@@ -16,13 +16,13 @@ describe("authDoor", () => {
   it("cliente volta pela porta da barbearia; o resto, pela porta do sistema", () => {
     expect(authDoor("/barbearia-do-tico/minhas-reservas")).toBe("/barbearia-do-tico/entrar")
     expect(authDoor("/barbearia-do-tico", "criar-conta")).toBe("/barbearia-do-tico/criar-conta")
-    expect(authDoor("/dashboard/agendamentos")).toBe("/painel/entrar")
+    expect(authDoor("/agendamentos")).toBe("/painel/entrar")
     expect(authDoor("/painel")).toBe("/painel/entrar") // palavra reservada nunca é barbearia
   })
 })
 
 describe("safeNext", () => {
-  it.each(["/dashboard", "/dashboard/agendamentos", "/dashboard/contas?mes=1"])("aceita %s", (path) => {
+  it.each(["/dashboard", "/agendamentos", "/financeiro/despesas", "/site", "/mais/documentos", "/dashboard/contas?mes=1"])("aceita %s", (path) => {
     expect(safeNext(path)).toBe(path)
   })
 
@@ -50,7 +50,7 @@ describe("safeNext e as páginas das barbearias na raiz", () => {
   })
 
   it("recusa palavras reservadas, caminhos com mais níveis e letras maiúsculas", () => {
-    for (const path of ["/login", "/auth/callback", "/acesso", "/site", "/api", "/barbearia/outra/coisa", "/barbearia-do-tico/outra", "/BARBEARIA", "/-ruim", "/ruim-"]) {
+    for (const path of ["/login", "/auth/callback", "/acesso", "/site-albuns", "/api", "/barbearia/outra/coisa", "/barbearia-do-tico/outra", "/BARBEARIA", "/-ruim", "/ruim-"]) {
       expect(safeNext(path), path).toBe("/dashboard")
     }
   })

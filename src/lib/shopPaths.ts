@@ -1,11 +1,16 @@
 /**
  * Endereços públicos das barbearias: o slug fica na raiz (`/:slug`, `/:slug/minhas-reservas`). Tudo que monta um link de barbearia
  * passa por aqui, e as palavras que o sistema já usa na raiz ficam RESERVADAS (nenhuma barbearia pode ter esses endereços).
- * A lista é repetida no banco (migration 0014, `private.is_reserved_slug`); o teste `shopPaths.test.ts` confere que as duas são iguais.
+ * A lista é repetida no banco (`private.is_reserved_slug`, migrations 0014 e 0032); o teste `shopPaths.test.ts` confere que as duas são iguais.
  */
+/** Telas do painel que moram na raiz (`/agendamentos`, `/financeiro/despesas`…). `/dashboard` é só o Início. */
+export const PANEL_ROOTS = ["agendamentos", "clientes", "financeiro", "analises", "mensagens", "site", "configuracoes", "servicos", "equipe", "mais", "barbearias", "horarios"] as const
+
 export const RESERVED_SLUGS = [
   // rotas do sistema (têm prioridade sobre /:slug)
   "dashboard", "login", "auth", "acesso", "convite", "minhas-reservas", "e",
+  // telas do painel na raiz (PANEL_ROOTS; "site" já está na lista abaixo)
+  "agendamentos", "clientes", "financeiro", "analises", "mensagens", "configuracoes", "servicos", "equipe", "mais", "barbearias", "horarios",
   // áreas e nomes que o produto pode usar na raiz
   "site", "site-albuns", "admin", "app", "painel", "entrar", "cadastro", "cadastrar", "planos", "precos", "suporte", "ajuda", "termos", "privacidade", "contato", "sobre", "blog",
   // infraestrutura, arquivos estáticos e desenvolvimento
@@ -38,6 +43,6 @@ export const shopSectionPath = (slug: string, section: ShopSection): string => `
  */
 export type AuthArea = "painel" | "cliente"
 export const AUTH_AREAS: readonly AuthArea[] = ["painel", "cliente"]
-const PANEL_PATH = /^\/(?:painel|dashboard|convite|login)?(?:[/?#]|$)/
+const PANEL_PATH = new RegExp(`^/(?:painel|dashboard|convite|login|${PANEL_ROOTS.join("|")})?(?:[/?#]|$)`)
 export const areaOf = (path: string): AuthArea => (PANEL_PATH.test(path) ? "painel" : "cliente")
 export const toAuthArea = (value: unknown): AuthArea | null => (value === "painel" || value === "cliente" ? value : null)

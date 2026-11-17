@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ChangeEvent, type ReactNode } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { useSearchParams } from "react-router-dom"
+import { usePathTab } from "@/lib/pathTab"
 import { Check, Copy, ExternalLink, Image as ImageIcon, Layers, Link2, Monitor, Palette, Pencil, Plus, Tag, Trash2, X, type LucideIcon } from "lucide-react"
 import { CatalogFrame, ShopGate } from "@/features/catalog/components/CatalogFrame"
 import { fetchProfessionals, fetchServices } from "@/features/catalog/api"
@@ -33,17 +33,15 @@ const FIELD = "h-11 text-base md:h-10 md:text-sm"
 const SLUG_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/
 const DESCRIPTION = "Monte a página pública da sua barbearia com um template profissional."
 
-/** Abas de Meu site (`?aba=`): Site (template, descrição, cores e endereço) e Fotos (logo, capa e galeria). */
+/** Abas de Meu site (`/site` e `/site/fotos`): Site (template, descrição, cores e endereço) e Fotos (logo, capa e galeria). */
 const TABS = [{ value: "site", label: "Site" }, { value: "fotos", label: "Fotos" }] as const
 type TabId = (typeof TABS)[number]["value"]
-const isTab = (v: string | null): v is TabId => TABS.some((t) => t.value === v)
+const TAB_IDS = TABS.map((t) => t.value)
 
 export function SiteSettings() {
   const gate = useActiveBarbershop()
   const shop = gate.state === "ready" ? gate.active : null
-  const [params, setParams] = useSearchParams()
-  const tab: TabId = isTab(params.get("aba")) ? (params.get("aba") as TabId) : "site"
-  const setTab = (value: string) => setParams((cur) => { const next = new URLSearchParams(cur); next.set("aba", value); return next }, { replace: true })
+  const [tab, setTab] = usePathTab("/site", TAB_IDS)
   const manager = gate.state === "ready" && gate.canManage
   const viewSite = shop && shop.status === "ativo" && (
     <Button asChild variant="outline" className="h-11 gap-2 md:h-10">

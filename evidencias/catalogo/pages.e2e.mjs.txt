@@ -55,7 +55,7 @@ const path = (page) => new URL(page.url()).pathname
   await page.goto(BASE + "/dashboard", { waitUntil: "load" })
   await page.getByText("Nenhuma barbearia vinculada").waitFor()
   await page.getByRole("link", { name: "Criar barbearia" }).click()
-  await page.waitForURL(BASE + "/dashboard/barbearias/nova")
+  await page.waitForURL(BASE + "/barbearias/nova")
   await page.getByLabel("Nome da barbearia").fill("Barbearia do João")
   check("endereço sugerido a partir do nome", (await page.getByLabel("Endereço público").inputValue()) === "barbearia-do-joao")
   await page.screenshot({ path: `${OUT}/nova-barbearia-1440.png` })
@@ -72,12 +72,12 @@ const path = (page) => new URL(page.url()).pathname
 // Serviços
 {
   const { page, context, log } = await open({})
-  await page.goto(BASE + "/dashboard/servicos", { waitUntil: "load" })
+  await page.goto(BASE + "/servicos", { waitUntil: "load" })
   await page.getByText("Corte").first().waitFor()
   const row = await page.evaluate(() => { const li = [...document.querySelectorAll("main li")].find((e) => e.textContent.includes("Corte")); return li.textContent })
   check("serviço mostra duração e preço", /40 min/.test(row) && /R\$\s60,00/.test(row), row.slice(0, 80))
   check("serviço inativo sinalizado", await page.getByText("Inativo").isVisible())
-  check("item Serviços marcado na sidebar", (await page.locator('aside a[aria-current="page"]').getAttribute("href")) === "/dashboard/servicos")
+  check("item Serviços marcado na sidebar", (await page.locator('aside a[aria-current="page"]').getAttribute("href")) === "/servicos")
   const css = await page.evaluate(() => ({ w: document.querySelector("main > div").offsetWidth, bg: getComputedStyle(document.querySelector("main ul").closest("div")).backgroundColor }))
   check("lista com largura máxima de 768px e cor de painel", css.w === 768 && css.bg === "rgb(23, 26, 31)", JSON.stringify(css))
   await page.screenshot({ path: `${OUT}/servicos-1440.png` })
@@ -101,7 +101,7 @@ const path = (page) => new URL(page.url()).pathname
 // Equipe
 {
   const { page, context, log } = await open({})
-  await page.goto(BASE + "/dashboard/equipe", { waitUntil: "load" })
+  await page.goto(BASE + "/equipe", { waitUntil: "load" })
   await page.getByText("João").waitFor()
   check("equipe mostra os serviços do profissional", await page.getByRole("list", { name: "Serviços de João" }).getByText("Corte").isVisible())
   await page.screenshot({ path: `${OUT}/equipe-1440.png` })
@@ -119,7 +119,7 @@ const path = (page) => new URL(page.url()).pathname
 
 // Responsividade
 for (const [w, h] of [[320, 568], [390, 844], [768, 1024], [1024, 768], [1440, 900]]) {
-  for (const route of ["/dashboard/servicos", "/dashboard/equipe", "/dashboard/barbearias/nova"]) {
+  for (const route of ["/servicos", "/equipe", "/barbearias/nova"]) {
     const { page, context } = await open({ width: w, height: h })
     await page.goto(BASE + route, { waitUntil: "load" })
     await page.getByRole("heading", { level: 1 }).waitFor()
@@ -128,14 +128,14 @@ for (const [w, h] of [[320, 568], [390, 844], [768, 1024], [1024, 768], [1440, 9
     const nav = await page.evaluate(() => ({ bottom: !!document.querySelector("nav.fixed") && getComputedStyle(document.querySelector("nav.fixed")).display !== "none", items: document.querySelectorAll("nav.fixed a").length }))
     const small = w < 768 ? await page.evaluate(() => [...document.querySelectorAll("main a, main button, nav.fixed a")].filter((e) => e.offsetParent && e.offsetHeight < 44).map((e) => (e.textContent || e.getAttribute("aria-label")).slice(0, 20) + ":" + e.offsetHeight)) : []
     check(`${w}px ${route}: sem scroll horizontal`, o <= 0)
-    if (w < 768 && route === "/dashboard/servicos") check(`${w}px: barra inferior com 5 destinos e alvos >= 44px`, nav.bottom && nav.items === 5 && small.length === 0, small.join(", "))
+    if (w < 768 && route === "/servicos") check(`${w}px: barra inferior com 5 destinos e alvos >= 44px`, nav.bottom && nav.items === 5 && small.length === 0, small.join(", "))
     if ([390, 1440].includes(w)) await page.screenshot({ path: `${OUT}${route.replace(/\//g, "-")}-${w}.png` })
     await context.close()
   }
 }
 {
   const { page, context } = await open({ width: 390, height: 844 })
-  await page.goto(BASE + "/dashboard/servicos", { waitUntil: "load" })
+  await page.goto(BASE + "/servicos", { waitUntil: "load" })
   await page.getByRole("button", { name: "Novo serviço" }).tap()
   const dlg = page.getByRole("dialog"); await dlg.waitFor()
   const box = await dlg.boundingBox()

@@ -63,7 +63,7 @@ export function RescheduleForm({ booking, tz, photos, onDone }: Props) {
 export function RescheduleDialog({ booking, tz, photos, onDone }: Props) {
   return (
     <Dialog open onOpenChange={(open) => { if (!open) onDone() }}>
-      <DialogContent className="max-h-[90dvh] w-[calc(100%-2rem)] max-w-[560px] overflow-y-auto bg-card">
+      <DialogContent className="max-h-[90dvh] w-[calc(100%-2rem)] max-w-[720px] overflow-y-auto bg-card">
         <div className="flex flex-col gap-1.5 pr-8 text-left">
           <DialogTitle className="font-display text-2xl font-bold tracking-wide">Reagendar</DialogTitle>
           <DialogDescription>{booking.servico_nome} · {formatDateTime(booking.inicio, tz)}. A reserva atual vale até a confirmação do novo horário.</DialogDescription>

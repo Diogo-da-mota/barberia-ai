@@ -1,4 +1,4 @@
-import { isReservedSlug, toAuthArea } from "@/lib/shopPaths"
+import { PANEL_ROOTS, isReservedSlug, toAuthArea } from "@/lib/shopPaths"
 
 export type AuthView = "entrar" | "criar-conta" | "recuperar"
 
@@ -20,6 +20,9 @@ const NEXT_KEY = "barberia:auth-next"
 /** Endereço de barbearia na raiz: /slug ou /slug/minhas-reservas (nunca uma palavra reservada do sistema). */
 const SHOP_PATH = /^\/([a-z0-9]+(?:-[a-z0-9]+)*)(?:\/(?:minhas-reservas|servicos|profissionais|galeria|contato))?(?:[?#]|$)/
 
+/** Destinos do sistema aceitos depois do login: o Início, as telas do painel na raiz, a área do cliente e o convite. */
+const KNOWN_NEXT = new RegExp(`^/(?:dashboard|${PANEL_ROOTS.join("|")}|minhas-reservas|convite|e/[a-z0-9-]+)(?:[/?#]|$)`)
+
 /** Porta do sistema (dono e equipe): /painel/entrar, /painel/criar-conta, /painel/recuperar. */
 export const panelAuthPath = (view: AuthView = "entrar"): string => `/painel/${view}`
 
@@ -33,7 +36,7 @@ export function authDoor(next: string, view: AuthView = "entrar"): string {
 export function safeNext(path: unknown): string {
   if (typeof path !== "string") return DEFAULT_NEXT
   const shop = SHOP_PATH.exec(path)
-  const known = /^\/(?:dashboard|minhas-reservas|convite|e\/[a-z0-9-]+)(?:[/?#]|$)/.test(path) || Boolean(shop && !isReservedSlug(shop[1]))
+  const known = KNOWN_NEXT.test(path) || Boolean(shop && !isReservedSlug(shop[1]))
   if (!known) return DEFAULT_NEXT
   if (path.includes("..") || path.includes("\\")) return DEFAULT_NEXT
   return path

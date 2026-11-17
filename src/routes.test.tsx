@@ -81,11 +81,11 @@ describe("rota pública /", () => {
 describe("rota protegida /dashboard", () => {
   it("sem sessão, volta à Landing Page pedindo login e guarda o destino", async () => {
     mocks.getSession.mockResolvedValue(null)
-    const router = renderAt("/dashboard/agendamentos")
+    const router = renderAt("/agendamentos")
 
     await waitFor(() => expect(router.state.location.pathname).toBe("/painel/entrar"))
     expect(router.state.location.search).toBe("")
-    expect(router.state.location.state).toEqual({ from: "/dashboard/agendamentos" })
+    expect(router.state.location.state).toEqual({ from: "/agendamentos" })
     expect(screen.queryByText("Em desenvolvimento")).not.toBeInTheDocument()
   })
 
@@ -129,7 +129,7 @@ describe("rota protegida /dashboard", () => {
 
   it("não repete o painel nos destinos ainda não implementados", async () => {
     mocks.getSession.mockResolvedValue(SESSION)
-    renderAt("/dashboard/agendamentos")
+    renderAt("/agendamentos")
 
     expect(await screen.findByRole("heading", { level: 1, name: "Agendamentos" })).toBeInTheDocument()
     expect(screen.queryByText("Próximos atendimentos")).not.toBeInTheDocument()
@@ -167,16 +167,16 @@ describe("demais rotas", () => {
 
   it("um nível desconhecido é endereço de barbearia (/:slug): mostra 'Barbearia não encontrada', não a Landing", async () => {
     mocks.getSession.mockResolvedValue(null)
-    const router = renderAt("/agendamentos")
+    const router = renderAt("/barbearia-inexistente")
     expect(await screen.findByText(/Barbearia não encontrada|Agendamento indisponível|Não foi possível carregar esta barbearia/)).toBeInTheDocument()
-    expect(router.state.location.pathname).toBe("/agendamentos")
+    expect(router.state.location.pathname).toBe("/barbearia-inexistente")
   })
 })
 
 describe("o painel não depende de botão: a proteção está nas rotas", () => {
   it("visitante em qualquer rota do painel vai para o login, sem ver conteúdo", async () => {
     mocks.getSession.mockResolvedValue(null)
-    for (const path of ["/dashboard", "/dashboard/financeiro", "/dashboard/equipe", "/dashboard/mais"]) {
+    for (const path of ["/dashboard", "/financeiro", "/financeiro/despesas", "/mensagens/notificacoes", "/equipe", "/mais", "/dashboard/agendamentos", "/dashboard/financeiro?aba=despesas"]) {
       const router = renderAt(path)
       await waitFor(() => expect(router.state.location.pathname, path).toBe("/painel/entrar"))
       expect(router.state.location.search).toBe("")
@@ -186,7 +186,7 @@ describe("o painel não depende de botão: a proteção está nas rotas", () => 
   it("quem só tem vínculo de cliente é devolvido à área do cliente nas telas de gestão", async () => {
     mocks.getSession.mockResolvedValue(SESSION)
     mocks.fetchMyBarbershops.mockResolvedValue({ status: "ok", barbershops: [{ id: "b1", nome: "Loja", slug: "loja", endereco: null, status: "ativo", fuso: "America/Sao_Paulo", papel: "cliente" }] })
-    for (const path of ["/dashboard/financeiro", "/dashboard/equipe", "/dashboard/mensagens", "/dashboard/site"]) {
+    for (const path of ["/financeiro", "/equipe", "/mensagens", "/site"]) {
       const router = renderAt(path)
       await waitFor(() => expect(router.state.location.pathname, path).toBe("/acesso")) // porta do cliente; a sessão do painel é encerrada
     }

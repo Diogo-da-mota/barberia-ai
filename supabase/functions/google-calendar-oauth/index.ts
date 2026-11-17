@@ -20,7 +20,7 @@ Deno.serve(async (req) => {
   const app = Deno.env.get("APP_URL") ?? ""
   const redirectUri = `${Deno.env.get("SUPABASE_URL")}/functions/v1/google-calendar-oauth`
   // Volta ao painel e apaga o verificador PKCE (uso único)
-  const back = (status: string) => redirect(`${app}/dashboard/mais?calendario=${status}`, pkceCookie("", 0, COOKIE_PATH))
+  const back = (status: string) => redirect(`${app}/mais?calendario=${status}`, pkceCookie("", 0, COOKIE_PATH))
   const state = url.searchParams.get("state") ?? ""
   const code = url.searchParams.get("code")
 

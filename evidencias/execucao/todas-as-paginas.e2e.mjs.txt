@@ -138,13 +138,13 @@ const text = (page) => page.locator("body").innerText()
   void errors
 }
 
-// ---------- /dashboard/financeiro (F07) ----------
+// ---------- /financeiro (F07) ----------
 {
   const { page, context, errors, calls, state } = await open({ papel: "proprietario" })
-  await page.goto(BASE + "/dashboard/financeiro", { waitUntil: "load" })
+  await page.goto(BASE + "/financeiro", { waitUntil: "load" })
   await page.getByText("Resultado estimado").waitFor()
   const t = await text(page)
-  check("/dashboard/financeiro (proprietário) : resumo com previsto, custos e resultado negativo", /Previsto/.test(t) && /Custos/.test(t) && /1\.200,00/.test(t) && /-.*1\.224,00|1\.224,00/.test(t) && /não é conciliação bancária|nada aqui é conciliação bancária/.test(t))
+  check("/financeiro (proprietário) : resumo com previsto, custos e resultado negativo", /Previsto/.test(t) && /Custos/.test(t) && /1\.200,00/.test(t) && /-.*1\.224,00|1\.224,00/.test(t) && /não é conciliação bancária|nada aqui é conciliação bancária/.test(t))
   await page.screenshot({ path: `${OUT}/financeiro-resumo-1440.png`, fullPage: true })
 
   await page.getByRole("tab", { name: "Pagamentos" }).click()
@@ -153,72 +153,72 @@ const text = (page) => page.locator("body").innerText()
   await page.getByRole("button", { name: "Registrar pagamento" }).click()
   await page.waitForTimeout(600)
   const pay = calls.find((c) => c.fn === "register_payment")
-  check("/dashboard/financeiro : registrar pagamento envia valor em centavos, forma e chave de idempotência", pay?.body.p_valor_centavos === 6000 && pay.body.p_forma === "pix" && typeof pay.body.p_idempotency_key === "string" && pay.body.p_idempotency_key.length > 10, JSON.stringify(pay?.body))
+  check("/financeiro : registrar pagamento envia valor em centavos, forma e chave de idempotência", pay?.body.p_valor_centavos === 6000 && pay.body.p_forma === "pix" && typeof pay.body.p_idempotency_key === "string" && pay.body.p_idempotency_key.length > 10, JSON.stringify(pay?.body))
   await page.screenshot({ path: `${OUT}/financeiro-pagamentos-1440.png`, fullPage: true })
 
   await page.getByRole("tab", { name: "Comissões" }).click()
   await page.getByText("Regras de comissão").waitFor()
   await page.getByLabel("Percentual (%)").fill("150")
   await page.getByRole("button", { name: "Salvar regra" }).click()
-  check("/dashboard/financeiro : percentual acima de 100% é recusado na tela, sem chamar o servidor", /de 0 a 100/.test(await text(page)) && !calls.some((c) => c.fn === "save_commission_rule"))
+  check("/financeiro : percentual acima de 100% é recusado na tela, sem chamar o servidor", /de 0 a 100/.test(await text(page)) && !calls.some((c) => c.fn === "save_commission_rule"))
   void state
-  check("/dashboard/financeiro : sem erros de console", errors.length === 0, errors.join(" | "))
+  check("/financeiro : sem erros de console", errors.length === 0, errors.join(" | "))
   await context.close()
 
   const barb = await open({ papel: "barbeiro" })
-  await barb.page.goto(BASE + "/dashboard/financeiro", { waitUntil: "load" })
+  await barb.page.goto(BASE + "/financeiro", { waitUntil: "load" })
   await barb.page.getByText("Meus ganhos").first().waitFor()
   const bt = await text(barb.page)
-  check("/dashboard/financeiro (barbeiro) : só os próprios ganhos, sem abas de gestão nem custos", /A receber/.test(bt) && (await barb.page.getByRole("tab").count()) === 0 && !/Custos/.test(bt) && !barb.calls.some((c) => c.fn === "finance_report"))
+  check("/financeiro (barbeiro) : só os próprios ganhos, sem abas de gestão nem custos", /A receber/.test(bt) && (await barb.page.getByRole("tab").count()) === 0 && !/Custos/.test(bt) && !barb.calls.some((c) => c.fn === "finance_report"))
   await barb.page.screenshot({ path: `${OUT}/financeiro-barbeiro-1440.png`, fullPage: true })
   await barb.context.close()
 }
 
-// ---------- /dashboard/mensagens (F08) ----------
+// ---------- /mensagens (F08) ----------
 {
   const { page, context, errors } = await open({ papel: "proprietario" })
-  await page.goto(BASE + "/dashboard/mensagens", { waitUntil: "load" })
+  await page.goto(BASE + "/mensagens", { waitUntil: "load" })
   await page.getByText("Últimos envios").waitFor()
   const t = await text(page)
-  check("/dashboard/mensagens (gestão) : canal não configurado e eventos bloqueados, sem simular entrega", /Não configurado/.test(t) && /Bloqueado/.test(t) && /Nada foi enviado/.test(t) && !/Enviado\n?\s*[1-9]/.test(t))
-  check("/dashboard/mensagens : telefone mascarado e motivo do cancelamento explicado", /\(11\) 9\*\*\*\*-5678/.test(t) && !/11912345678/.test(t) && /não autorizou/.test(t))
+  check("/mensagens (gestão) : canal não configurado e eventos bloqueados, sem simular entrega", /Não configurado/.test(t) && /Bloqueado/.test(t) && /Nada foi enviado/.test(t) && !/Enviado\n?\s*[1-9]/.test(t))
+  check("/mensagens : telefone mascarado e motivo do cancelamento explicado", /\(11\) 9\*\*\*\*-5678/.test(t) && !/11912345678/.test(t) && /não autorizou/.test(t))
   await page.screenshot({ path: `${OUT}/mensagens-1440.png`, fullPage: true })
-  check("/dashboard/mensagens : sem erros de console", errors.length === 0, errors.join(" | "))
+  check("/mensagens : sem erros de console", errors.length === 0, errors.join(" | "))
   await context.close()
   const barb = await open({ papel: "barbeiro" })
-  await barb.page.goto(BASE + "/dashboard/mensagens", { waitUntil: "load" })
+  await barb.page.goto(BASE + "/mensagens", { waitUntil: "load" })
   await barb.page.getByText("Área da gestão").waitFor()
-  check("/dashboard/mensagens (barbeiro) : bloqueado e sem consultar envios", !barb.calls.some((c) => c.fn === "outbox_summary"))
+  check("/mensagens (barbeiro) : bloqueado e sem consultar envios", !barb.calls.some((c) => c.fn === "outbox_summary"))
   await barb.context.close()
 }
 
-// ---------- /dashboard/site (F09) ----------
+// ---------- /site (F09) ----------
 {
   const { page, context, errors, calls, state } = await open({ papel: "proprietario" })
-  await page.goto(BASE + "/dashboard/site", { waitUntil: "load" })
+  await page.goto(BASE + "/site", { waitUntil: "load" })
   await page.getByRole("heading", { name: "Identidade" }).waitFor()
-  check("/dashboard/site : formulário carregado com descrição e logo atual", (await page.getByLabel("Descrição").inputValue()) === "Cortes clássicos desde 2010." && (await page.getByRole("img", { name: "Logo", exact: true }).count()) === 1 && (await page.getByRole("complementary", { name: "Pré-visualização do site" }).count()) === 1)
+  check("/site : formulário carregado com descrição e logo atual", (await page.getByLabel("Descrição").inputValue()) === "Cortes clássicos desde 2010." && (await page.getByRole("img", { name: "Logo", exact: true }).count()) === 1 && (await page.getByRole("complementary", { name: "Pré-visualização do site" }).count()) === 1)
   await page.getByLabel("Descrição").fill("Navalha e café.")
   await page.getByRole("button", { name: /Verde/ }).click()
   const preview = page.getByRole("complementary", { name: "Pré-visualização do site" })
   const previewBtn = await preview.getByText("Agendar horário").evaluate((el) => getComputedStyle(el).backgroundColor)
-  check("/dashboard/site : a pré-visualização muda na hora com a descrição e a cor (verde)", (await preview.getByText("Navalha e café.").count()) === 1 && previewBtn === "rgb(34, 197, 94)", previewBtn)
+  check("/site : a pré-visualização muda na hora com a descrição e a cor (verde)", (await preview.getByText("Navalha e café.").count()) === 1 && previewBtn === "rgb(34, 197, 94)", previewBtn)
   await page.getByRole("button", { name: "Salvar identidade" }).click()
   await page.waitForTimeout(500)
-  check("/dashboard/site : salvar envia descrição e cor da paleta", state.savedProfile?.p_descricao === "Navalha e café." && state.savedProfile?.p_cor === "verde", JSON.stringify(state.savedProfile))
+  check("/site : salvar envia descrição e cor da paleta", state.savedProfile?.p_descricao === "Navalha e café." && state.savedProfile?.p_cor === "verde", JSON.stringify(state.savedProfile))
   await page.locator('input[type="file"]').first().setInputFiles({ name: "x.svg", mimeType: "image/svg+xml", buffer: Buffer.from("<svg/>") })
   await page.getByText("Use uma imagem JPEG, PNG ou WebP.").waitFor()
-  check("/dashboard/site : endereço e telefone não são duplicados aqui e seguem como estão", (await page.getByLabel("Endereço", { exact: true }).count()) === 0 && state.savedProfile?.p_endereco === "Rua de Teste, 10" && state.savedProfile?.p_telefone === "11999990000")
-  check("/dashboard/site : SVG é recusado na tela e nada é enviado ao storage", !calls.some((c) => c.fn === "register_media"))
+  check("/site : endereço e telefone não são duplicados aqui e seguem como estão", (await page.getByLabel("Endereço", { exact: true }).count()) === 0 && state.savedProfile?.p_endereco === "Rua de Teste, 10" && state.savedProfile?.p_telefone === "11999990000")
+  check("/site : SVG é recusado na tela e nada é enviado ao storage", !calls.some((c) => c.fn === "register_media"))
   await page.screenshot({ path: `${OUT}/site-1440.png`, fullPage: true })
   void errors
   await context.close()
 }
 
-// ---------- /dashboard/mais (planos, calendário, preferências) ----------
+// ---------- /mais (planos, calendário, preferências) ----------
 {
   const { page, context, errors } = await open({ papel: "proprietario" })
-  await page.goto(BASE + "/dashboard/mais", { waitUntil: "load" })
+  await page.goto(BASE + "/mais", { waitUntil: "load" })
   await page.getByText("Plano Inicial").waitFor()
   const t = await text(page)
   const linksNoMais = await page.locator("main a[href^='/dashboard'], main a[href^='/minhas'], main a[href^='/e/']").count()
@@ -227,23 +227,23 @@ const text = (page) => page.locator("body").innerText()
   let naSidebar = 0
   for (const nome of todos) naSidebar += await sidebar.getByRole("link", { name: nome }).count()
   const verSite = page.getByRole("banner", { name: "Cabeçalho do painel" }).getByRole("link", { name: "Ver site" })
-  check("/dashboard/mais (proprietário) : sem lista de rotas na página; destinos só na sidebar; Ver site só no header (não repete na sidebar)", linksNoMais === 0 && naSidebar === todos.length && (await sidebar.getByRole("link", { name: "Página pública" }).count()) === 0 && (await verSite.getAttribute("href")) === "/e/barbearia-ficticia" && (await verSite.getAttribute("target")) === "_blank", `linksNoMais=${linksNoMais} naSidebar=${naSidebar}`)
-  check("/dashboard/mais (proprietário) : plano em teste com uso e aviso de cobrança indisponível", /Período de teste/.test(t) && /1 de 2 profissionais ativos/.test(t) && /cobrança online ainda não está disponível/.test(t))
-  check("/dashboard/mais (proprietário) : preferência de novidades desligada por padrão", (await page.getByRole("checkbox", { name: /Receber novidades/ }).isChecked()) === false && errors.length === 0, errors.join(" | "))
+  check("/mais (proprietário) : sem lista de rotas na página; destinos só na sidebar; Ver site só no header (não repete na sidebar)", linksNoMais === 0 && naSidebar === todos.length && (await sidebar.getByRole("link", { name: "Página pública" }).count()) === 0 && (await verSite.getAttribute("href")) === "/e/barbearia-ficticia" && (await verSite.getAttribute("target")) === "_blank", `linksNoMais=${linksNoMais} naSidebar=${naSidebar}`)
+  check("/mais (proprietário) : plano em teste com uso e aviso de cobrança indisponível", /Período de teste/.test(t) && /1 de 2 profissionais ativos/.test(t) && /cobrança online ainda não está disponível/.test(t))
+  check("/mais (proprietário) : preferência de novidades desligada por padrão", (await page.getByRole("checkbox", { name: /Receber novidades/ }).isChecked()) === false && errors.length === 0, errors.join(" | "))
   await page.screenshot({ path: `${OUT}/mais-proprietario-1440.png`, fullPage: true })
   await context.close()
   const barb = await open({ papel: "barbeiro" })
-  await barb.page.goto(BASE + "/dashboard/mais", { waitUntil: "load" })
+  await barb.page.goto(BASE + "/mais", { waitUntil: "load" })
   await barb.page.getByRole("heading", { name: "Google Calendar" }).waitFor()
   const bt = await text(barb.page)
-  check("/dashboard/mais (barbeiro) : Financeiro só na sidebar e Google Calendar desativado até o administrador ligar", (await barb.page.getByRole("navigation", { name: "Navegação principal" }).first().getByRole("link", { name: "Financeiro" }).count()) === 1 && !/Meus ganhos/.test(bt) && /ainda não foi ativada/.test(bt) && (await barb.page.getByRole("button", { name: /Vincular/ }).isDisabled()) && !/Plano Inicial/.test(bt))
+  check("/mais (barbeiro) : Financeiro só na sidebar e Google Calendar desativado até o administrador ligar", (await barb.page.getByRole("navigation", { name: "Navegação principal" }).first().getByRole("link", { name: "Financeiro" }).count()) === 1 && !/Meus ganhos/.test(bt) && /ainda não foi ativada/.test(bt) && (await barb.page.getByRole("button", { name: /Vincular/ }).isDisabled()) && !/Plano Inicial/.test(bt))
   await barb.context.close()
 }
 
 // ---------- Menu no celular (a mesma lista da sidebar) ----------
 {
   const { page, context, errors } = await open({ papel: "proprietario", width: 390, height: 844 })
-  await page.goto(BASE + "/dashboard/mais", { waitUntil: "load" })
+  await page.goto(BASE + "/mais", { waitUntil: "load" })
   check("390px : Ver site aparece no header do celular (ícone) com a rota da página pública", (await page.getByRole("link", { name: "Ver site" }).getAttribute("href")) === "/e/barbearia-ficticia")
   await page.getByRole("button", { name: "Menu" }).click()
   const menu = page.getByRole("navigation", { name: "Menu completo" })
@@ -254,16 +254,16 @@ const text = (page) => page.locator("body").innerText()
   await page.screenshot({ path: `${OUT}/menu-celular-390.png` })
   await menu.getByRole("link", { name: "Mensagens" }).click()
   await page.getByText("Últimos envios").waitFor()
-  check("390px : botão Menu abre a lista completa e navega (mensagens)", achados === nomes.length && new URL(page.url()).pathname === "/dashboard/mensagens" && errors.length === 0, `achados=${achados} ${errors.join(" | ")}`)
+  check("390px : botão Menu abre a lista completa e navega (mensagens)", achados === nomes.length && new URL(page.url()).pathname === "/mensagens" && errors.length === 0, `achados=${achados} ${errors.join(" | ")}`)
   await context.close()
 }
 
 // ---------- Layout fixo: sidebar e header nunca se movem; só o conteúdo rola (janela baixa, para forçar rolagem) ----------
 {
   const PAINEL = [
-    ["/dashboard", "proprietario"], ["/dashboard/agendamentos", "proprietario"], ["/dashboard/servicos", "proprietario"], ["/dashboard/equipe", "proprietario"],
-    ["/dashboard/horarios", "proprietario"], ["/dashboard/clientes", "proprietario"], ["/dashboard/financeiro", "proprietario"], ["/dashboard/mensagens", "proprietario"],
-    ["/dashboard/site", "proprietario"], ["/dashboard/mais", "proprietario"], ["/dashboard/barbearias/nova", "proprietario"], ["/minhas-reservas", "cliente"], ["/dashboard", "cliente"],
+    ["/dashboard", "proprietario"], ["/agendamentos", "proprietario"], ["/servicos", "proprietario"], ["/equipe", "proprietario"],
+    ["/horarios", "proprietario"], ["/clientes", "proprietario"], ["/financeiro", "proprietario"], ["/mensagens", "proprietario"],
+    ["/site", "proprietario"], ["/mais", "proprietario"], ["/barbearias/nova", "proprietario"], ["/minhas-reservas", "cliente"], ["/dashboard", "cliente"],
   ]
   for (const [w, h] of [[1440, 600], [1024, 600], [390, 640]]) {
     for (const [path, papel] of PAINEL) {
@@ -293,12 +293,12 @@ const text = (page) => page.locator("body").innerText()
 const PAGES = [
   ["/", "público", null], ["/e/barbearia-ficticia", "público", null],
   ["/minhas-reservas", "sessão", "cliente"], ["/dashboard", "sessão", "proprietario"],
-  ["/dashboard/agendamentos", "equipe", "proprietario"], ["/dashboard/servicos", "equipe", "proprietario"], ["/dashboard/equipe", "equipe", "proprietario"],
-  ["/dashboard/horarios", "gestão", "proprietario"], ["/dashboard/clientes", "equipe", "proprietario"], ["/dashboard/financeiro", "gestão", "proprietario"],
-  ["/dashboard/mensagens", "gestão", "proprietario"], ["/dashboard/site", "gestão", "proprietario"], ["/dashboard/mais", "sessão", "proprietario"],
-  ["/dashboard/barbearias/nova", "sessão", "proprietario"],
-  ["/dashboard/agendamentos", "barbeiro", "barbeiro"], ["/dashboard/financeiro", "barbeiro", "barbeiro"], ["/dashboard/mais", "barbeiro", "barbeiro"],
-  ["/dashboard/financeiro", "cliente (sem barbearia)", "cliente"], ["/dashboard/mais", "cliente", "cliente"],
+  ["/agendamentos", "equipe", "proprietario"], ["/servicos", "equipe", "proprietario"], ["/equipe", "equipe", "proprietario"],
+  ["/horarios", "gestão", "proprietario"], ["/clientes", "equipe", "proprietario"], ["/financeiro", "gestão", "proprietario"],
+  ["/mensagens", "gestão", "proprietario"], ["/site", "gestão", "proprietario"], ["/mais", "sessão", "proprietario"],
+  ["/barbearias/nova", "sessão", "proprietario"],
+  ["/agendamentos", "barbeiro", "barbeiro"], ["/financeiro", "barbeiro", "barbeiro"], ["/mais", "barbeiro", "barbeiro"],
+  ["/financeiro", "cliente (sem barbearia)", "cliente"], ["/mais", "cliente", "cliente"],
 ]
 for (const width of [390, 1440]) {
   for (const [path, grupo, papel] of PAGES) {
@@ -309,7 +309,7 @@ for (const width of [390, 1440]) {
     const horizontal = await overflow(page)
     const body = await text(page)
     check(`${width}px ${path} [${grupo}${papel ? `: ${papel}` : ""}] : título, sem rolagem lateral, sem erros`, h1 >= 1 && !horizontal && errors.length === 0 && body.trim().length > 20, `h1=${h1} overflow=${horizontal} erros=${errors.join(" | ")}`)
-    if (width === 390 && ["/dashboard/financeiro", "/dashboard/mensagens", "/dashboard/site", "/dashboard/mais"].includes(path) && papel === "proprietario") await page.screenshot({ path: `${OUT}${path.replaceAll("/", "-")}-390.png`, fullPage: true })
+    if (width === 390 && ["/financeiro", "/mensagens", "/site", "/mais"].includes(path) && papel === "proprietario") await page.screenshot({ path: `${OUT}${path.replaceAll("/", "-")}-390.png`, fullPage: true })
     await context.close()
   }
 }

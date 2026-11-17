@@ -68,7 +68,7 @@ describe("Shell", () => {
     await screen.findByRole("link", { name: "Clientes" })
 
     const [, bottom] = screen.getAllByRole("navigation", { name: "Navegação principal" })
-    expect(hrefsOf(bottom)).toEqual(["/dashboard", "/dashboard/agendamentos", "/dashboard/servicos", "/dashboard/equipe", "/dashboard/mais"])
+    expect(hrefsOf(bottom)).toEqual(["/dashboard", "/agendamentos", "/servicos", "/equipe", "/mais"])
   })
 
   it("a sidebar da equipe não tem Minhas reservas: essa área é do cliente final", async () => {
@@ -89,8 +89,8 @@ describe("Shell", () => {
 
     const [sidebar] = screen.getAllByRole("navigation", { name: "Navegação principal" })
     expect(hrefsOf(sidebar)).toEqual([
-      "/dashboard", "/dashboard/agendamentos", "/dashboard/clientes", "/dashboard/servicos", "/dashboard/equipe",
-      "/dashboard/financeiro", "/dashboard/analises", "/dashboard/mensagens", "/dashboard/site", "/dashboard/configuracoes", "/dashboard/mais",
+      "/dashboard", "/agendamentos", "/clientes", "/servicos", "/equipe",
+      "/financeiro", "/analises", "/mensagens", "/site", "/configuracoes", "/mais",
     ])
   })
 
@@ -146,7 +146,7 @@ describe("Shell", () => {
     const view = renderShell()
     expect(await screen.findByRole("link", { name: "Mensagens" })).toBeInTheDocument()
     expect(screen.getByRole("link", { name: "Meu site" })).toBeInTheDocument()
-    expect(screen.getByRole("link", { name: "Configurações" })).toHaveAttribute("href", "/dashboard/configuracoes")
+    expect(screen.getByRole("link", { name: "Configurações" })).toHaveAttribute("href", "/configuracoes")
     expect(screen.getByRole("button", { name: "Conversar com a Lara" })).toBeInTheDocument() // Lara flutuante só da gestão
     view.unmount()
 
@@ -170,7 +170,7 @@ describe("Shell", () => {
     expect(hrefsOf(menu)).toEqual(doSidebar)
     expect(new Set(hrefsOf(menu)).size).toBe(hrefsOf(menu).length)
     fireEvent.click(within(menu).getByRole("link", { name: "Financeiro" }))
-    await waitFor(() => expect(screen.getByTestId("path")).toHaveTextContent("/dashboard/financeiro"))
+    await waitFor(() => expect(screen.getByTestId("path")).toHaveTextContent("/financeiro"))
     expect(screen.queryByRole("navigation", { name: "Menu completo" })).not.toBeInTheDocument()
   })
 
@@ -199,7 +199,7 @@ describe("Shell", () => {
     await screen.findByRole("link", { name: "Minhas reservas" })
 
     const [sidebar] = screen.getAllByRole("navigation", { name: "Navegação principal" })
-    expect(hrefsOf(sidebar)).toEqual(["/dashboard", "/minhas-reservas", "/dashboard/mais"])
+    expect(hrefsOf(sidebar)).toEqual(["/dashboard", "/minhas-reservas", "/mais"])
   })
 
   it("barbearia inativa não oferece a página pública", async () => {
@@ -210,14 +210,14 @@ describe("Shell", () => {
   })
 
   it("marca somente o destino atual", async () => {
-    renderShell("/dashboard/agendamentos")
+    renderShell("/agendamentos")
     await screen.findByRole("link", { name: "Clientes" })
 
     const [sidebar] = screen.getAllByRole("navigation", { name: "Navegação principal" })
     const links = within(sidebar).getAllByRole("link")
     const current = links.filter((link) => link.getAttribute("aria-current") === "page")
     expect(current).toHaveLength(1)
-    expect(current[0]).toHaveAttribute("href", "/dashboard/agendamentos")
+    expect(current[0]).toHaveAttribute("href", "/agendamentos")
   })
 
   it("encerra a sessão e volta à Landing Page ao clicar em Sair", async () => {

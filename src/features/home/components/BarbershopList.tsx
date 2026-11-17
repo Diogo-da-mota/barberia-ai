@@ -88,7 +88,7 @@ function Content({ result, isError, isRetrying, onRetry, compact }: BarbershopLi
         description="Quando você criar uma barbearia ou aceitar um convite, ela aparece aqui."
         action={
           <Button asChild className="h-11 md:h-10">
-            <Link to="/dashboard/barbearias/nova">Criar barbearia</Link>
+            <Link to="/barbearias/nova">Criar barbearia</Link>
           </Button>
         }
       />

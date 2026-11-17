@@ -1,4 +1,5 @@
-import { Link, Navigate, useSearchParams } from "react-router-dom"
+import { Link } from "react-router-dom"
+import { usePathTab } from "@/lib/pathTab"
 import { useQuery } from "@tanstack/react-query"
 import { Settings } from "lucide-react"
 import { AppearanceCard } from "@/app/AppearanceCard"
@@ -26,12 +27,11 @@ const TABS = [
 
 /** Abas que já existiram em Mais e hoje moram em outra rota: links antigos continuam funcionando. */
 const MOVED: Record<string, string> = {
-  notificacoes: "/dashboard/mensagens?aba=notificacoes",
-  horario: "/dashboard/equipe",
-  whatsapp: "/dashboard/mais?aba=dados", // a integração WhatsApp mora no card ao lado do Contato comercial
+  notificacoes: "/mensagens/notificacoes",
+  horario: "/equipe",
+  whatsapp: "/mais", // a integração WhatsApp mora no card ao lado do Contato comercial
 }
-type TabId = (typeof TABS)[number]["value"]
-const isTab = (v: string | null): v is TabId => TABS.some((t) => t.value === v)
+const TAB_IDS = TABS.map((t) => t.value)
 
 const DESCRIPTION = "Dados e informações da sua barbearia."
 
@@ -44,18 +44,14 @@ export function More() {
   const gate = useActiveBarbershop()
   const shop = gate.state === "ready" ? gate.active : null
   const manager = Boolean(shop && gate.state === "ready" && gate.canManage)
-  const [params, setParams] = useSearchParams()
-  const requested = params.get("aba")
-  if (requested && MOVED[requested]) return <Navigate to={MOVED[requested]} replace />
-  const tab: TabId = isTab(requested) ? requested : "dados"
-  const setTab = (value: string) => setParams((cur) => { const next = new URLSearchParams(cur); next.set("aba", value); return next }, { replace: true })
+  const [tab, setTab] = usePathTab("/mais", TAB_IDS, MOVED)
 
   if (!manager || !shop) {
     return (
       <CatalogFrame full title="Mais" description={DESCRIPTION} header={<TabbedHeader photo={false} name="mais" icon={Settings} title="Mais" description="Dados e preferências da sua conta." />}>
         {gate.state === "none" && !gate.clientOnly && (
           <Panel>
-            <EmptyState title="Você ainda não tem barbearia" description="Crie a sua para cadastrar serviços, equipe e receber reservas." action={<Button asChild className="h-11 md:h-10"><Link to="/dashboard/barbearias/nova">Criar barbearia</Link></Button>} />
+            <EmptyState title="Você ainda não tem barbearia" description="Crie a sua para cadastrar serviços, equipe e receber reservas." action={<Button asChild className="h-11 md:h-10"><Link to="/barbearias/nova">Criar barbearia</Link></Button>} />
           </Panel>
         )}
         {shop && <ShopSummary shop={shop} />}

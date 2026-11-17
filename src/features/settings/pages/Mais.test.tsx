@@ -45,7 +45,7 @@ const details = (over: Record<string, unknown> = {}) => ({
 })
 const fiscal = (over: Record<string, unknown> = {}) => ({ supported: true, data: { tipo_pessoa: "juridica", documento: "11222333000181", razao_social: "Barbearia do TICO LTDA", responsavel_nome: "Fulano", inscricao_estadual: null, ...over } })
 
-function setup(path = "/dashboard/mais") {
+function setup(path = "/mais") {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(<QueryClientProvider client={client}><MemoryRouter initialEntries={[path]}><More /></MemoryRouter></QueryClientProvider>)
 }
@@ -65,7 +65,7 @@ beforeEach(() => {
   other.updateShopInfo.mockResolvedValue(undefined)
 })
 
-describe("/dashboard/mais: estrutura", () => {
+describe("/mais: estrutura", () => {
   it("cabeçalho compacto (sem foto) com as duas abas, aba Dados por padrão e link direto por ?aba=", async () => {
     setup()
     expect(await screen.findByRole("heading", { level: 1, name: "Mais" })).toBeInTheDocument()
@@ -76,7 +76,7 @@ describe("/dashboard/mais: estrutura", () => {
   })
 
   it("?aba=documentos abre direto a aba pedida", async () => {
-    setup("/dashboard/mais?aba=documentos")
+    setup("/mais?aba=documentos")
     expect(await screen.findByRole("heading", { name: "Adicionar documento" })).toBeInTheDocument()
     expect(tab("Documentos")).toHaveAttribute("aria-selected", "true")
   })
@@ -216,7 +216,7 @@ describe("aba Dados da barbearia", () => {
 describe("aba Documentos", () => {
   it("sem a migration 0013: avisa e não deixa enviar nada (nada simulado)", async () => {
     api.fetchDocuments.mockResolvedValue({ supported: false, rows: [] })
-    setup("/dashboard/mais?aba=documentos")
+    setup("/mais?aba=documentos")
     expect(await screen.findByText(/depende da migration 0013/)).toBeInTheDocument()
     expect(screen.getByLabelText("Arquivo do documento")).toBeDisabled()
     expect(screen.getByRole("button", { name: "Escolher arquivo" })).toBeDisabled()
@@ -224,7 +224,7 @@ describe("aba Documentos", () => {
 
   it("lista os documentos com tipo, arquivo, tamanho e data, sem status de 'válido'", async () => {
     api.fetchDocuments.mockResolvedValue({ supported: true, rows: [{ id: "d1", tipo: "alvara", nome_arquivo: "alvara.pdf", storage_path: "loja-1/alvara-1.pdf", mime: "application/pdf", tamanho_bytes: 412 * 1024, criado_em: "2026-11-10T15:00:00Z" }] })
-    setup("/dashboard/mais?aba=documentos")
+    setup("/mais?aba=documentos")
     expect(await screen.findByText("Alvará de funcionamento")).toBeInTheDocument()
     expect(screen.getByText(/alvara\.pdf · 412 KB · Enviado em 10\/11\/2026/)).toBeInTheDocument()
     expect(screen.queryByText(/Válido|Aprovado/)).not.toBeInTheDocument()
@@ -235,7 +235,7 @@ describe("aba Documentos", () => {
     api.signedDocumentUrl.mockResolvedValue("https://signed.test/doc?token=x")
     const tabWindow = { location: { href: "" }, close: vi.fn() }
     vi.spyOn(window, "open").mockReturnValue(tabWindow as unknown as Window)
-    setup("/dashboard/mais?aba=documentos")
+    setup("/mais?aba=documentos")
     expect(api.signedDocumentUrl).not.toHaveBeenCalled()
     fireEvent.click(await screen.findByRole("button", { name: "Ver Comprovante de CNPJ" }))
     await waitFor(() => expect(api.signedDocumentUrl).toHaveBeenCalledWith("loja-1/cnpj-1.pdf"))
@@ -245,7 +245,7 @@ describe("aba Documentos", () => {
   it("remover pede confirmação e só então remove", async () => {
     api.fetchDocuments.mockResolvedValue({ supported: true, rows: [{ id: "d1", tipo: "alvara", nome_arquivo: "alvara.pdf", storage_path: "p", mime: "application/pdf", tamanho_bytes: 1000, criado_em: "2026-11-10T15:00:00Z" }] })
     api.removeDocument.mockResolvedValue(undefined)
-    setup("/dashboard/mais?aba=documentos")
+    setup("/mais?aba=documentos")
     fireEvent.click(await screen.findByRole("button", { name: "Remover Alvará de funcionamento" }))
     expect(api.removeDocument).not.toHaveBeenCalled()
     fireEvent.click(await screen.findByRole("button", { name: "Remover" }))
@@ -253,7 +253,7 @@ describe("aba Documentos", () => {
   })
 
   it("exige o tipo antes do arquivo e recusa tipo ou tamanho inválidos", async () => {
-    setup("/dashboard/mais?aba=documentos")
+    setup("/mais?aba=documentos")
     const input = await screen.findByLabelText("Arquivo do documento")
     fireEvent.change(input, { target: { files: [new File(["x"], "a.pdf", { type: "application/pdf" })] } })
     expect(await screen.findByRole("alert")).toHaveTextContent("Escolha o tipo do documento antes de enviar o arquivo.")
@@ -262,7 +262,7 @@ describe("aba Documentos", () => {
 
   it("só o proprietário acessa os documentos", async () => {
     gate.papel = "gerente"
-    setup("/dashboard/mais?aba=documentos")
+    setup("/mais?aba=documentos")
     expect(await screen.findByText("Só o proprietário acessa os documentos da barbearia.")).toBeInTheDocument()
     expect(api.fetchDocuments).not.toHaveBeenCalled()
   })
@@ -273,25 +273,25 @@ describe("abas que mudaram de lugar", () => {
   const open = (path: string) => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
     return render(<QueryClientProvider client={client}><MemoryRouter initialEntries={[path]}><Routes>
-      <Route path="/dashboard/mais" element={<More />} />
+      <Route path="/mais" element={<More />} />
       <Route path="*" element={<Where />} />
     </Routes></MemoryRouter></QueryClientProvider>)
   }
 
   it("o link antigo de Notificações leva para a aba Notificações da Central de mensagens", async () => {
-    open("/dashboard/mais?aba=notificacoes")
-    expect(await screen.findByTestId("onde")).toHaveTextContent("/dashboard/mensagens?aba=notificacoes")
+    open("/mais?aba=notificacoes")
+    expect(await screen.findByTestId("onde")).toHaveTextContent("/mensagens/notificacoes")
   })
 
   it("o link antigo da aba WhatsApp abre a aba Dados, onde está o card Integração WhatsApp", async () => {
-    open("/dashboard/mais?aba=whatsapp")
+    open("/mais?aba=whatsapp")
     expect(await screen.findByRole("tab", { name: "Dados da barbearia" })).toHaveAttribute("aria-selected", "true")
     expect(screen.queryByRole("tab", { name: "WhatsApp" })).not.toBeInTheDocument()
   })
 
   it("o link antigo de Horário e atendimento leva para Equipe, onde a jornada é editada", async () => {
-    open("/dashboard/mais?aba=horario")
-    expect(await screen.findByTestId("onde")).toHaveTextContent("/dashboard/equipe")
+    open("/mais?aba=horario")
+    expect(await screen.findByTestId("onde")).toHaveTextContent("/equipe")
   })
 
   it("Mais não tem mais horário, bloqueios, regras, notificações nem aba WhatsApp: só Dados e Documentos", async () => {

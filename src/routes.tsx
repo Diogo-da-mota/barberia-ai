@@ -1,5 +1,5 @@
 import { createBrowserRouter, Navigate, Outlet, useLocation, useParams, type RouteObject } from "react-router-dom"
-import { SHOP_AUTH_VIEWS, SHOP_SECTIONS, shopBookingsPath, shopPath } from "@/lib/shopPaths"
+import { PANEL_ROOTS, SHOP_AUTH_VIEWS, SHOP_SECTIONS, shopBookingsPath, shopPath } from "@/lib/shopPaths"
 import { Finance } from "@/features/finance/pages/Finance"
 import { Analytics } from "@/features/analytics/pages/Analytics"
 import { Messages } from "@/features/messaging/pages/Messages"
@@ -35,13 +35,21 @@ export function LegacyShopRedirect({ bookings = false }: { bookings?: boolean })
   return <Navigate to={`${bookings ? shopBookingsPath(slug) : shopPath(slug)}${search}${hash}`} replace state={state} />
 }
 
+/** /dashboard/<tela>… → /<tela>…, preservando consulta e âncora (o `?aba=` antigo é convertido pela própria tela). Tela desconhecida volta ao Início. */
+export function LegacyPanelRedirect() {
+  const rest = useParams()["*"] ?? ""
+  const { search, hash, state } = useLocation()
+  const known = (PANEL_ROOTS as readonly string[]).includes(rest.split("/")[0])
+  return <Navigate to={known ? `/${rest}${search}${hash}` : "/dashboard"} replace state={state} />
+}
+
 function LoginRedirect() {
   const { state } = useLocation()
   return <Navigate to={panelAuthPath()} replace state={state} />
 }
 
 /**
- * Painel (/dashboard…): conta que só é cliente não fica logada aqui. A sessão do PAINEL é encerrada (a do cliente, se houver,
+ * Painel (/dashboard e as telas da raiz): conta que só é cliente não fica logada aqui. A sessão do PAINEL é encerrada (a do cliente, se houver,
  * continua) e a pessoa vai para a porta do cliente. Conta sem nenhum vínculo segue (dono novo cria a barbearia). A segurança
  * real continua no banco (RLS).
  */
@@ -82,7 +90,7 @@ export const routes: RouteObject[] = [
   // Links antigos (/e/:slug…) seguem funcionando: o vercel.json redireciona (308) e, onde não houver hospedagem, o roteador faz o mesmo.
   { path: "/e/:slug", element: <LegacyShopRedirect /> },
   { path: "/e/:slug/minhas-reservas", element: <LegacyShopRedirect bookings /> },
-  // Endereços das barbearias na raiz. As rotas fixas acima e /dashboard têm prioridade sobre /:slug (o roteador ordena por especificidade),
+  // Endereços das barbearias na raiz. As rotas fixas acima e as do painel têm prioridade sobre /:slug (o roteador ordena por especificidade),
   // e as palavras do sistema são reservadas (src/lib/shopPaths.ts) para nenhuma barbearia ocupar esses nomes.
   { path: "/:slug", element: <PublicShop /> },
   { path: "/:slug/minhas-reservas", element: <ClientBookings /> },
@@ -93,35 +101,37 @@ export const routes: RouteObject[] = [
   // Área do cliente (exige sessão confirmada pelo servidor)
   { path: "/minhas-reservas", element: <AuthGuard loginPath={clientAccessPath}><MyBookings /></AuthGuard> },
 
-  // Rotas privadas (exigem sessão confirmada pelo servidor)
+  // Rotas privadas (exigem sessão confirmada pelo servidor). /dashboard é só o Início; as telas ficam na raiz (PANEL_ROOTS)
+  // e as abas no caminho (/financeiro/despesas), lidas por usePathTab. O segmento opcional mantém a mesma tela ao trocar de aba.
   {
-    path: "/dashboard",
     element: (
       <AuthGuard>
         <PanelGate />
       </AuthGuard>
     ),
     children: [
-      { index: true, element: <Home /> },
+      { path: "/dashboard", element: <Home /> },
       {
         element: <StaffRoute />,
         children: [
-          { path: "agendamentos", element: <Agenda /> },
-          { path: "horarios", element: <Navigate to="/dashboard/equipe" replace /> }, // os horários agora ficam na edição do profissional (Equipe)
-          { path: "clientes", element: <Customers /> },
-          { path: "financeiro", element: <Finance /> },
-          { path: "analises", element: <Analytics /> },
-          { path: "mensagens", element: <Messages /> },
-          { path: "site", element: <SiteSettings /> },
-          { path: "configuracoes", element: <Settings /> },
-          { path: "servicos", element: <Services /> },
-          { path: "equipe", element: <Team /> },
+          { path: "/agendamentos", element: <Agenda /> },
+          { path: "/horarios", element: <Navigate to="/equipe" replace /> }, // os horários ficam na edição do profissional (Equipe)
+          { path: "/clientes", element: <Customers /> },
+          { path: "/financeiro/:aba?", element: <Finance /> },
+          { path: "/analises", element: <Analytics /> },
+          { path: "/mensagens/:aba?", element: <Messages /> },
+          { path: "/site/:aba?", element: <SiteSettings /> },
+          { path: "/configuracoes", element: <Settings /> },
+          { path: "/servicos", element: <Services /> },
+          { path: "/equipe", element: <Team /> },
         ],
       },
-      { path: "barbearias/nova", element: <CreateBarbershop /> },
-      { path: "mais", element: <More /> },
+      { path: "/barbearias/nova", element: <CreateBarbershop /> },
+      { path: "/mais/:aba?", element: <More /> },
     ],
   },
+  // Endereços antigos do painel (/dashboard/agendamentos…) seguem funcionando.
+  { path: "/dashboard/*", element: <LegacyPanelRedirect /> },
 
   { path: "*", element: <Navigate to="/" replace /> },
 ]

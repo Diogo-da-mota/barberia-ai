@@ -127,7 +127,7 @@ group = "REAL"
   await shot(page, "popup-validacao-1440")
   await context.close()
 }
-for (const route of ["/dashboard", "/dashboard/agendamentos", "/login"]) {
+for (const route of ["/dashboard", "/agendamentos", "/login"]) {
   const { page, context } = await open({ real: true })
   await page.goto(BASE + route, { waitUntil: "load" })
   await dialog(page).waitFor()
@@ -165,7 +165,7 @@ for (const route of ["/dashboard", "/dashboard/agendamentos", "/login"]) {
 {
   // Google: segue até a tela real do Google e para. Nenhum login é feito.
   const { page, context, log } = await open({ real: true })
-  await page.goto(BASE + "/dashboard/agendamentos", { waitUntil: "load" })
+  await page.goto(BASE + "/agendamentos", { waitUntil: "load" })
   await dialog(page).waitFor()
   await dialog(page).getByRole("button", { name: "Continuar com Google" }).click()
   await page.waitForURL(/accounts\.google\.com/, { timeout: 20000, waitUntil: "commit" })
@@ -219,12 +219,12 @@ const OK_LOGIN = { "/auth/v1/token": { body: SESSION } }
 }
 {
   const { page, context } = await open({ mocks: OK_LOGIN })
-  await page.goto(BASE + "/dashboard/agendamentos", { waitUntil: "load" })
+  await page.goto(BASE + "/agendamentos", { waitUntil: "load" })
   await dialog(page).waitFor()
   await dialog(page).getByLabel("Email").fill("teste@example.test")
   await dialog(page).getByLabel("Senha", { exact: true }).fill("senha-de-teste")
   await dialog(page).getByRole("button", { name: "Entrar", exact: true }).click()
-  await page.waitForURL(BASE + "/dashboard/agendamentos")
+  await page.waitForURL(BASE + "/agendamentos")
   check("login volta ao destino protegido pedido", true)
   await context.close()
 }
@@ -354,14 +354,14 @@ const OK_LOGIN = { "/auth/v1/token": { body: SESSION } }
   check("painel: tema alterna", beforeTheme !== (await page.evaluate(() => document.documentElement.className)))
   await page.locator("aside").getByRole("button", { name: "Alternar tema" }).click()
 
-  for (const [name, p] of [["Agendamentos", "/dashboard/agendamentos"], ["Cartões", "/dashboard/cartoes"], ["Contas", "/dashboard/contas"], ["Mais", "/dashboard/mais"], ["Início", "/dashboard"]]) {
+  for (const [name, p] of [["Agendamentos", "/agendamentos"], ["Cartões", "/dashboard/cartoes"], ["Contas", "/dashboard/contas"], ["Mais", "/mais"], ["Início", "/dashboard"]]) {
     await page.locator("aside nav").getByRole("link", { name }).click()
     await page.waitForURL(BASE + p)
     await page.locator(`aside a[aria-current="page"][href="${p}"]`).waitFor({ timeout: 5000 })
     check(`painel: navega para ${p}`, (await page.locator('aside a[aria-current="page"]').count()) === 1)
   }
   await page.getByRole("link", { name: /Ver agenda/ }).click()
-  await page.waitForURL(BASE + "/dashboard/agendamentos")
+  await page.waitForURL(BASE + "/agendamentos")
   check("painel: Ver agenda", true)
   check("painel: sem exceção", log.pageErrors.length === 0)
   await context.close()

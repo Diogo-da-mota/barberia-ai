@@ -75,7 +75,7 @@ export function AssistantChat({ shopId, className, onClose }: { shopId: string; 
       ) : !connected ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
           <p className="max-w-[32ch] text-sm text-muted-foreground">Conecte uma chave de IA em Configurações › Assistente para conversar com a Lara.</p>
-          {onClose && <Button asChild variant="outline" className="h-10"><Link to="/dashboard/configuracoes" onClick={onClose}>Conectar chave</Link></Button>}
+          {onClose && <Button asChild variant="outline" className="h-10"><Link to="/configuracoes" onClick={onClose}>Conectar chave</Link></Button>}
         </div>
       ) : (
         <>

@@ -151,12 +151,12 @@ describe("popup: abrir e fechar", () => {
 describe("Google", () => {
   it("inicia o fluxo guardando o destino pedido", async () => {
     mocks.signInWithGoogle.mockResolvedValue(undefined)
-    renderAt("/dashboard/agendamentos")
+    renderAt("/agendamentos")
     const popup = await dialog()
 
     fireEvent.click(within(popup).getByRole("button", { name: "Continuar com Google" }))
 
-    await waitFor(() => expect(mocks.signInWithGoogle).toHaveBeenCalledWith("/dashboard/agendamentos"))
+    await waitFor(() => expect(mocks.signInWithGoogle).toHaveBeenCalledWith("/agendamentos"))
   })
 
   it("mostra a falha em vez de ficar em silêncio", async () => {
@@ -243,14 +243,14 @@ describe("login com email e senha", () => {
 
   it("login aceito volta ao destino protegido pedido antes", async () => {
     mocks.signInWithPassword.mockImplementation(async () => emit("SIGNED_IN", SESSION))
-    const router = renderAt("/dashboard/agendamentos")
+    const router = renderAt("/agendamentos")
     const popup = await dialog()
 
     type("Email", "a@b.co")
     type("Senha", "correta")
     fireEvent.click(within(popup).getByRole("button", { name: "Entrar" }))
 
-    await waitFor(() => expect(router.state.location.pathname).toBe("/dashboard/agendamentos"))
+    await waitFor(() => expect(router.state.location.pathname).toBe("/agendamentos"))
   })
 })
 
@@ -621,7 +621,7 @@ describe("portas separadas: cliente final x gestão", () => {
   })
 
   it("rota de gestão sem login continua indo para a entrada do sistema", async () => {
-    const router = renderAt("/dashboard/agendamentos")
+    const router = renderAt("/agendamentos")
     await waitFor(() => expect(router.state.location.pathname).toBe("/painel/entrar"))
     expect(router.state.location.search).toBe("")
   })
@@ -630,21 +630,21 @@ describe("portas separadas: cliente final x gestão", () => {
     localStorage.setItem("barberia:ultima-barbearia", "barbearia-do-tico")
     mocks.getSession.mockResolvedValue(SESSION)
     mocks.fetchMyBarbershops.mockResolvedValue({ status: "ok", barbershops: [{ id: "l1", nome: "Loja", slug: "loja", endereco: null, status: "ativo", papel: "cliente" }] })
-    const router = renderAt("/dashboard/financeiro")
+    const router = renderAt("/financeiro")
     await waitFor(() => expect(router.state.location.pathname).toBe("/barbearia-do-tico/minhas-reservas"))
   })
 
   it("quem tem papel na equipe abre a gestão normalmente", async () => {
     mocks.getSession.mockResolvedValue(SESSION)
     mocks.fetchMyBarbershops.mockResolvedValue({ status: "ok", barbershops: [{ id: "l1", nome: "Loja", slug: "loja", endereco: null, status: "ativo", papel: "proprietario" }] })
-    const router = renderAt("/dashboard/financeiro")
-    await waitFor(() => expect(router.state.location.pathname).toBe("/dashboard/financeiro"))
+    const router = renderAt("/financeiro")
+    await waitFor(() => expect(router.state.location.pathname).toBe("/financeiro"))
   })
 
   it("dono novo, sem nenhuma barbearia, não é tratado como cliente", async () => {
     mocks.getSession.mockResolvedValue(SESSION)
     mocks.fetchMyBarbershops.mockResolvedValue({ status: "ok", barbershops: [] })
-    const router = renderAt("/dashboard/servicos")
-    await waitFor(() => expect(router.state.location.pathname).toBe("/dashboard/servicos"))
+    const router = renderAt("/servicos")
+    await waitFor(() => expect(router.state.location.pathname).toBe("/servicos"))
   })
 })

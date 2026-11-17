@@ -8,10 +8,10 @@ type Action = { label: string; hint: string; icon: LucideIcon; to: string; exter
 /** Menu de atalhos para telas que existem. Nada de ação inventada: cada item leva a um lugar onde a ação já funciona. */
 export function QuickActions({ manager, siteSlug }: { manager: boolean; siteSlug: string | null }) {
   const actions: Action[] = [
-    { label: "Ver agenda", hint: "Atendimentos do dia", icon: CalendarCheck, to: "/dashboard/agendamentos" },
+    { label: "Ver agenda", hint: "Atendimentos do dia", icon: CalendarCheck, to: "/agendamentos" },
     ...(manager ? [
-      { label: "Novo serviço", hint: "Cadastrar serviço", icon: Scissors, to: "/dashboard/servicos" },
-      { label: "Equipe", hint: "Gerenciar profissionais", icon: Users, to: "/dashboard/equipe" },
+      { label: "Novo serviço", hint: "Cadastrar serviço", icon: Scissors, to: "/servicos" },
+      { label: "Equipe", hint: "Gerenciar profissionais", icon: Users, to: "/equipe" },
     ] : []),
     ...(siteSlug ? [{ label: "Ver meu site", hint: "Acessar página pública", icon: Link2, to: shopPath(siteSlug), external: true }] : []),
   ]
