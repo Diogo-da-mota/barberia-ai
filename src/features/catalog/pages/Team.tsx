@@ -1,16 +1,19 @@
 import { useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Pencil, Plus, Trash2, UserPlus } from "lucide-react"
+import { Mail, Pencil, Plus, Trash2, UserPlus } from "lucide-react"
 import { Button } from "@/ui/button"
 import { EmptyState, Panel, StatusBadge } from "@/ui/finance"
 import { Skeleton } from "@/ui/skeleton"
 import { toast } from "@/ui/sonner"
 import { formatPhone } from "@/lib/br"
-import { deleteProfessional, fetchBarbers, fetchProfessionalContacts, fetchProfessionals, fetchServices, fetchTeamLinks } from "../api"
+import { deleteProfessional, fetchBarbers, fetchProfessionalContacts, fetchProfessionals, fetchServices, fetchTeamOrigins, type AccountOrigin } from "../api"
+import { GoogleIcon } from "@/features/auth/components/AuthForms"
 import { CatalogFrame, ShopGate } from "../components/CatalogFrame"
 import type { MyBarbershop } from "@/features/home/domain"
+import { fetchPlanUsage } from "@/features/plans/api"
+import { PlanLimitDialog } from "@/features/plans/PlanLimitDialog"
 import { ConfirmDelete } from "../components/ConfirmDelete"
-import { InviteDialog } from "../components/InviteDialog"
+import { InviteDialog, InviteHistory } from "../components/InviteDialog"
 import { ProfessionalCard } from "../components/ProfessionalCard"
 import { ProfessionalDialog } from "../components/ProfessionalDialog"
 import type { Professional } from "../domain"
@@ -31,11 +34,15 @@ function TeamList({ shop, canManage }: { shop: MyBarbershop; canManage: boolean 
   const [inviting, setInviting] = useState(false)
   const [editing, setEditing] = useState<Professional | "novo" | null>(null)
   const [deleting, setDeleting] = useState<Professional | null>(null)
+  const [limitOpen, setLimitOpen] = useState(false)
 
-  const team = useQuery({ queryKey: ["professionals", shopId], queryFn: () => fetchProfessionals(shopId) })
+  // staleTime 0: quem aceitou o convite (em outro aparelho) aparece ao abrir ou voltar para a página
+  const team = useQuery({ queryKey: ["professionals", shopId], queryFn: () => fetchProfessionals(shopId), staleTime: 0 })
   const services = useQuery({ queryKey: ["services", shopId], queryFn: () => fetchServices(shopId) })
-  const barbers = useQuery({ queryKey: ["barbers", shopId], queryFn: () => fetchBarbers(shopId), enabled: canManage })
-  const links = useQuery({ queryKey: ["team-links", shopId], queryFn: () => fetchTeamLinks(shopId), enabled: canManage })
+  // origem do cadastro (ícone ao lado do nome); "team-links" é a chave que o aceite do convite já atualiza
+  const origins = useQuery({ queryKey: ["team-links", shopId], queryFn: () => fetchTeamOrigins(shopId), enabled: canManage, staleTime: 0, retry: false })
+  const managers = useQuery({ queryKey: ["members", shopId, "gerente"], queryFn: () => fetchBarbers(shopId, "gerente"), enabled: canManage, staleTime: 0 })
+  const usage = useQuery({ queryKey: ["plan-usage", shopId], queryFn: () => fetchPlanUsage(shopId), enabled: canManage, staleTime: 0 })
   const contacts = useQuery({ queryKey: ["professional-contacts", shopId], queryFn: () => fetchProfessionalContacts(shopId), enabled: canManage })
   const serviceList = services.data?.status === "ok" ? services.data.data : []
   const serviceNames = new Map(serviceList.map((service) => [service.id, service.nome]))
@@ -44,6 +51,7 @@ function TeamList({ shop, canManage }: { shop: MyBarbershop; canManage: boolean 
     mutationFn: (professional: Professional) => deleteProfessional(shopId, professional.id),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["professionals", shopId] })
+      await queryClient.invalidateQueries({ queryKey: ["plan-usage", shopId] })
       toast.success("Profissional excluído.")
       setDeleting(null)
     },
@@ -73,8 +81,11 @@ function TeamList({ shop, canManage }: { shop: MyBarbershop; canManage: boolean 
   }
 
   const list = team.data.data
+  const max = usage.data?.max_profissionais ?? null
+  // Vagas cheias (contadas no banco): cadastrar abre o pop-up do limite; o servidor recusa de qualquer forma.
+  const atLimit = max !== null && (usage.data?.profissionais_ativos ?? 0) >= max
   const newButton = (
-    <Button className="h-11 shrink-0 gap-1 md:h-10" onClick={() => setEditing("novo")}>
+    <Button className="h-11 shrink-0 gap-1 md:h-10" onClick={() => (atLimit ? setLimitOpen(true) : setEditing("novo"))}>
       <Plus className="h-4 w-4" aria-hidden="true" />
       Novo profissional
     </Button>
@@ -90,7 +101,13 @@ function TeamList({ shop, canManage }: { shop: MyBarbershop; canManage: boolean 
 
   return (
     <>
-      {canManage && list.length > 0 && <div className="flex flex-wrap justify-end gap-2">{inviteButton}{newButton}</div>}
+      {/* indicador de vagas à esquerda de "Gerar link do convite", na mesma linha; no celular ele ocupa a linha de cima */}
+      {canManage && (usage.data || list.length > 0) && (
+        <div className="flex flex-wrap items-center justify-end gap-3">
+          {usage.data && <TeamSlots ativos={usage.data.profissionais_ativos} max={usage.data.max_profissionais} />}
+          {list.length > 0 && <div className="flex flex-wrap justify-end gap-2">{inviteButton}{newButton}</div>}
+        </div>
+      )}
       {canManage && <InviteDialog shop={shop} open={inviting} onOpenChange={setInviting} />}
 
       {list.length === 0 ? (
@@ -111,6 +128,8 @@ function TeamList({ shop, canManage }: { shop: MyBarbershop; canManage: boolean 
                 <ProfessionalCard
                   nome={professional.nome}
                   photoPath={professional.avatar_path}
+                  portrait
+                  nameIcon={origins.data?.[professional.id] && <OriginIcon origin={origins.data[professional.id]} />}
                   inactive={!professional.ativo}
                   details={
                     <>
@@ -146,16 +165,32 @@ function TeamList({ shop, canManage }: { shop: MyBarbershop; canManage: boolean 
         </ul>
       )}
 
+      {canManage && (managers.data?.length ?? 0) > 0 && (
+        <ul className="grid gap-4 sm:grid-cols-2" aria-label="Gerentes">
+          {managers.data!.map((member) => (
+            <li key={member.profile_id} className="flex">
+              <ProfessionalCard nome={member.nome} details={<><StatusBadge variant="default">Gerente</StatusBadge>{member.email && <p className="mt-1.5 truncate">{member.email}</p>}</>} />
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {canManage && <InviteHistory shop={shop} />}
+
       <ProfessionalDialog
         shopId={shopId}
         professional={editing === "novo" ? null : editing}
         services={serviceList}
-        barbers={barbers.data ?? []}
-        linkedProfileId={editing && editing !== "novo" ? (links.data?.[editing.id] ?? null) : null}
         contact={editing && editing !== "novo" ? (contacts.data?.[editing.id] ?? null) : null}
         open={editing !== null}
         onClose={() => setEditing(null)}
+        onPlanLimit={() => {
+          setEditing(null)
+          setLimitOpen(true)
+          void queryClient.invalidateQueries({ queryKey: ["plan-usage", shopId] })
+        }}
       />
+      <PlanLimitDialog open={limitOpen} onOpenChange={setLimitOpen} shopName={shop.nome} max={max} />
       <ConfirmDelete
         open={deleting !== null}
         title="Excluir profissional?"
@@ -166,5 +201,29 @@ function TeamList({ shop, canManage }: { shop: MyBarbershop; canManage: boolean 
         onClose={() => setDeleting(null)}
       />
     </>
+  )
+}
+
+const ORIGIN: Record<AccountOrigin, string> = { email: "Conta por e-mail", google: "Conta Google", manual: "Cadastro manual" }
+
+/** Origem do cadastro: envelope (e-mail), Google ou usuário com + (manual). O texto aparece ao passar o mouse. */
+function OriginIcon({ origin }: { origin: AccountOrigin }) {
+  return (
+    <span role="img" aria-label={ORIGIN[origin]} title={ORIGIN[origin]} className="inline-flex shrink-0 text-muted-foreground">
+      {origin === "google" ? <GoogleIcon className="h-4 w-4" /> : origin === "email" ? <Mail className="h-4 w-4" aria-hidden="true" /> : <UserPlus className="h-4 w-4" aria-hidden="true" />}
+    </span>
+  )
+}
+
+/** Vagas do plano: profissionais ATIVOS contados no banco (get_plan_usage); inativos e gerentes não ocupam vaga. */
+function TeamSlots({ ativos, max }: { ativos: number; max: number | null }) {
+  if (max === null) return <p className="text-sm">{`Profissionais ativos: ${ativos} (sem limite)`}</p>
+  return (
+    <div className="flex w-full flex-col gap-1.5 sm:w-auto sm:min-w-48 sm:flex-1">
+      <p className="text-sm">{`Profissionais ativos: ${ativos}/${max}`}</p>
+      <div role="progressbar" aria-label="Profissionais ativos" aria-valuenow={ativos} aria-valuemin={0} aria-valuemax={max} className="h-2 overflow-hidden rounded-full bg-muted">
+        <div className={`h-full rounded-full ${ativos >= max ? "bg-danger" : "bg-primary"}`} style={{ width: `${Math.min(100, (ativos / max) * 100)}%` }} />
+      </div>
+    </div>
   )
 }

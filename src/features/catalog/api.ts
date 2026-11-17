@@ -108,28 +108,25 @@ export async function saveProfessional(barbershopId: string, input: Professional
 
 export type Barber = { profile_id: string; nome: string; email: string | null }
 
-/** Contas com papel de barbeiro na barbearia (a gestão lê os vínculos e perfis pelo RLS). */
-export async function fetchBarbers(barbershopId: string): Promise<Barber[]> {
+/** Contas com o papel na barbearia (padrão: barbeiro; a gestão lê os vínculos e perfis pelo RLS). */
+export async function fetchBarbers(barbershopId: string, papel: "barbeiro" | "gerente" = "barbeiro"): Promise<Barber[]> {
   const { data, error } = await supabase
     .from("memberships")
     .select("profile_id, profiles(nome, email)")
     .eq("barbershop_id", barbershopId)
-    .eq("papel", "barbeiro")
+    .eq("papel", papel)
   if (error) throw error
   const rows = data as unknown as { profile_id: string; profiles: { nome: string; email: string | null } | null }[]
   return rows.map((row) => ({ profile_id: row.profile_id, nome: row.profiles?.nome ?? "Barbeiro", email: row.profiles?.email ?? null }))
 }
 
-/** professional_id → profile_id (somente a gestão recebe dados). */
-export async function fetchTeamLinks(barbershopId: string): Promise<Record<string, string>> {
-  const { data, error } = await supabase.rpc("get_team_links", { p_barbershop_id: barbershopId })
-  if (error) throw error
-  return Object.fromEntries((data as { professional_id: string; profile_id: string }[]).map((row) => [row.professional_id, row.profile_id]))
-}
+export type AccountOrigin = "manual" | "google" | "email"
 
-export async function linkProfessional(professionalId: string, profileId: string | null): Promise<void> {
-  const { error } = await supabase.rpc("link_professional", { p_professional_id: professionalId, p_profile_id: profileId })
+/** professional_id → origem do cadastro (manual, Google ou e-mail), pelo Supabase Auth da conta vinculada (0034; só gestão). */
+export async function fetchTeamOrigins(barbershopId: string): Promise<Record<string, AccountOrigin>> {
+  const { data, error } = await supabase.rpc("get_team_account_origins", { p_barbershop_id: barbershopId })
   if (error) throw error
+  return Object.fromEntries((data as { professional_id: string; origem: AccountOrigin }[]).map((row) => [row.professional_id, row.origem]))
 }
 
 export async function deleteProfessional(barbershopId: string, id: string): Promise<void> {

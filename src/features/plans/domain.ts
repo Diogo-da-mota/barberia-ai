@@ -14,6 +14,15 @@ export function usageText(ativos: number, max: number | null): string {
   return `${ativos} de ${max} profissionais ativos`
 }
 
+/** WhatsApp do desenvolvedor para aumentar o limite (ainda não há sistema de assinatura). */
+export const LIMIT_CONTACT_WHATSAPP = "5564993296649"
+
+/** Link do WhatsApp com a mensagem pronta, usando o nome real da barbearia (texto codificado na URL). */
+export function planLimitWhatsAppUrl(shopName: string): string {
+  const text = `Olá! Sou responsável pela barbearia ${shopName} e gostaria de aumentar o limite de profissionais da minha equipe. Podem me ajudar?`
+  return `https://wa.me/${LIMIT_CONTACT_WHATSAPP}?text=${encodeURIComponent(text)}`
+}
+
 /** Mensagem dos erros de limite do servidor; null quando o erro não é de plano. */
 export function planErrorMessage(error: unknown): string | null {
   const { message } = (error ?? {}) as { message?: string }

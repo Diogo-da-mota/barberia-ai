@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { planLabel, planStatusLabel, planStatusVariant, planErrorMessage, usageText } from "./domain"
+import { planLabel, planStatusLabel, planStatusVariant, planErrorMessage, planLimitWhatsAppUrl, usageText } from "./domain"
 
 describe("planos", () => {
   it("rotula planos e estados", () => {
@@ -22,5 +22,15 @@ describe("planos", () => {
     expect(planErrorMessage({ message: "subscription_inactive" })).toMatch(/assinatura/)
     expect(planErrorMessage({ message: "shop_limit" })).toMatch(/3 barbearias/)
     expect(planErrorMessage({ message: "x" })).toBeNull()
+  })
+})
+
+describe("contato para aumentar o limite", () => {
+  it("abre o WhatsApp do desenvolvedor com a mensagem e o nome da barbearia codificados", () => {
+    const url = planLimitWhatsAppUrl("Babearia do TICO & Cia")
+    expect(url.startsWith("https://wa.me/5564993296649?text=")).toBe(true)
+    expect(decodeURIComponent(new URL(url).searchParams.get("text") ?? "")).toBe("Olá! Sou responsável pela barbearia Babearia do TICO & Cia e gostaria de aumentar o limite de profissionais da minha equipe. Podem me ajudar?")
+    expect(url).not.toContain(" ")
+    expect(url).toContain("%26") // & não quebra o parâmetro
   })
 })

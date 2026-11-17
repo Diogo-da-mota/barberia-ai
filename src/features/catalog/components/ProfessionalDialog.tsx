@@ -12,7 +12,7 @@ import { Field } from "@/ui/finance"
 import { Input } from "@/ui/input"
 import { toast } from "@/ui/sonner"
 import { formatDocumento, formatPhone, isEmail, phoneDigits, validateDocumento, validatePhone } from "@/lib/br"
-import { linkProfessional, saveProfessional, saveProfessionalContact, type Barber, type ProfessionalContact } from "../api"
+import { saveProfessional, saveProfessionalContact, type ProfessionalContact } from "../api"
 import { ProfessionalAvatar } from "./ProfessionalAvatar"
 import { catalogErrorMessage, validateProfessional, type Professional, type Service } from "../domain"
 
@@ -20,12 +20,12 @@ type ProfessionalDialogProps = {
   shopId: string
   professional: Professional | null
   services: Service[]
-  barbers: Barber[]
-  linkedProfileId: string | null
   /** Contato atual (só a gestão recebe). */
   contact?: ProfessionalContact | null
   open: boolean
   onClose: () => void
+  /** Ativar/cadastrar recusado pelo limite do plano (plan_limit): quem abriu mostra o pop-up do limite. */
+  onPlanLimit?: () => void
 }
 
 export function ProfessionalDialog({ open, onClose, ...rest }: ProfessionalDialogProps) {
@@ -62,7 +62,7 @@ export function ProfessionalDialog({ open, onClose, ...rest }: ProfessionalDialo
   )
 }
 
-function ProfessionalForm({ shopId, professional, services, barbers, linkedProfileId, contact, onClose }: Omit<ProfessionalDialogProps, "open">) {
+function ProfessionalForm({ shopId, professional, services, contact, onClose, onPlanLimit }: Omit<ProfessionalDialogProps, "open">) {
   const queryClient = useQueryClient()
   const id = useId()
   const [error, setError] = useState<string | null>(null)
@@ -72,21 +72,23 @@ function ProfessionalForm({ shopId, professional, services, barbers, linkedProfi
   const [contactErrors, setContactErrors] = useState<Record<string, string>>({})
 
   const save = useMutation({
-    mutationFn: async (value: Parameters<typeof saveProfessional>[1] & { conta: string; contato: ProfessionalContact }) => {
-      const { conta, contato, ...input } = value
+    // Sem vínculo manual de conta: o barbeiro entra com a própria conta pelo convite (accept_invite liga o card sozinho).
+    mutationFn: async (value: Parameters<typeof saveProfessional>[1] & { contato: ProfessionalContact }) => {
+      const { contato, ...input } = value
       const id = await saveProfessional(shopId, input, professional?.id)
       await saveProfessionalContact(professional?.id ?? id, contato)
-      // Só chama o vínculo quando a escolha mudou
-      if (conta !== (linkedProfileId ?? "")) await linkProfessional(professional?.id ?? id, conta || null)
     },
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["professionals", shopId] })
-      await queryClient.invalidateQueries({ queryKey: ["team-links", shopId] })
       await queryClient.invalidateQueries({ queryKey: ["professional-contacts", shopId] })
+      await queryClient.invalidateQueries({ queryKey: ["plan-usage", shopId] }) // vagas do plano (ativar/inativar)
       toast.success(professional ? "Profissional atualizado." : "Profissional criado.")
       onClose()
     },
-    onError: (e) => setServerError(catalogErrorMessage(e, "Já existe um profissional com este nome.")),
+    onError: (e) => {
+      if ((e as { message?: string } | null)?.message === "plan_limit" && onPlanLimit) return onPlanLimit()
+      setServerError(catalogErrorMessage(e, "Já existe um profissional com este nome."))
+    },
   })
 
   const onSubmit = (event: FormEvent<HTMLFormElement>) => {
@@ -107,7 +109,6 @@ function ProfessionalForm({ shopId, professional, services, barbers, linkedProfi
         nome: nome.trim(),
         ativo: data.get("ativo") === "on",
         serviceIds: data.getAll("servicos").map(String),
-        conta: String(data.get("conta") ?? linkedProfileId ?? ""),
         contato: { telefone: phoneDigits(telefone) || null, email: email || null, documento: documento.replace(/\D/g, "") || null },
       })
     }
@@ -154,7 +155,7 @@ function ProfessionalForm({ shopId, professional, services, barbers, linkedProfi
           {services.length === 0 ? (
             <p className="text-sm text-muted-foreground">
               Nenhum serviço cadastrado ainda.{" "}
-              <Link to="/dashboard/servicos" className="font-medium text-link underline-offset-4 hover:underline">
+              <Link to="/servicos" className="font-medium text-link underline-offset-4 hover:underline">
                 Cadastrar serviços
               </Link>
             </p>
@@ -178,22 +179,6 @@ function ProfessionalForm({ shopId, professional, services, barbers, linkedProfi
           </label>
         </div>
       </fieldset>
-
-      {barbers.length > 0 && (
-        <fieldset className="flex flex-col gap-1">
-          <legend className="mb-1 text-sm font-medium">Conta de acesso do barbeiro</legend>
-          <label className="flex min-h-11 items-center gap-3 text-sm md:min-h-8">
-            <input type="radio" name="conta" value="" defaultChecked={!linkedProfileId} className="h-5 w-5 accent-primary" />
-            Sem conta
-          </label>
-          {barbers.map((barber) => (
-            <label key={barber.profile_id} className="flex min-h-11 items-center gap-3 text-sm md:min-h-8">
-              <input type="radio" name="conta" value={barber.profile_id} defaultChecked={linkedProfileId === barber.profile_id} className="h-5 w-5 accent-primary" />
-              {barber.nome}{barber.email ? ` (${barber.email})` : ""}
-            </label>
-          ))}
-        </fieldset>
-      )}
 
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
       {professional ? (

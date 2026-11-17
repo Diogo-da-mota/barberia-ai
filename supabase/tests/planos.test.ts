@@ -60,7 +60,7 @@ describe("F11-01: catálogo de planos e período de teste", () => {
   it("o catálogo é público; preços ainda não definidos e planos não comercializáveis", async () => {
     const planos = await rows(null, "select id, max_profissionais, trial_dias, preco_mensal_centavos, comercial from plans order by ordem")
     expect(planos.map((p) => p.id)).toEqual(["inicial", "profissional", "rede"])
-    expect(planos.map((p) => p.max_profissionais)).toEqual([2, 6, null])
+    expect(planos.map((p) => p.max_profissionais)).toEqual([5, 6, null])
     expect(planos.every((p) => p.preco_mensal_centavos === null && p.comercial === false)).toBe(true)
     await expect(rows(ID.dono, "update plans set max_profissionais = 999")).rejects.toThrow(/permission denied/)
   })
@@ -79,16 +79,15 @@ describe("F11-01: catálogo de planos e período de teste", () => {
 })
 
 describe("F11-05: limites medidos no servidor", () => {
-  it("o plano inicial aceita 2 profissionais ativos; o terceiro é recusado", async () => {
-    await prof(ID.dono, "Ana")
-    await prof(ID.dono, "Bia")
-    await expect(prof(ID.dono, "Caio")).rejects.toThrow(/plan_limit/)
+  it("o plano inicial aceita 5 profissionais ativos; o sexto é recusado", async () => {
+    for (const nome of ["Ana", "Bia", "Caio", "Duda", "Edu"]) await prof(ID.dono, nome)
+    await expect(prof(ID.dono, "Gabi")).rejects.toThrow(/plan_limit/)
   })
 
   it("inativar libera vaga; reativar acima do limite é recusado; contornar por update direto é impossível", async () => {
     const [{ id }] = await rows(ID.dono, "select id from professionals where nome = 'Bia'")
     await val(ID.dono, "select save_professional($1, $2, 'Bia', false, $3)", [loja, id, [corte]])
-    await prof(ID.dono, "Caio")
+    await prof(ID.dono, "Gabi")
     await expect(val(ID.dono, "select save_professional($1, $2, 'Bia', true, $3)", [loja, id, [corte]])).rejects.toThrow(/plan_limit/)
     await expect(sql("update professionals set ativo = true where id = $1", [id])).rejects.toThrow(/plan_limit/) // nem como superusuário: é gatilho
     await expect(rows(ID.dono, "update professionals set ativo = true where id = $1", [id])).rejects.toThrow(/permission denied/)
@@ -96,7 +95,7 @@ describe("F11-05: limites medidos no servidor", () => {
 
   it("o uso do plano é consultável pela gestão", async () => {
     const [u] = await rows(ID.dono, "select * from get_plan_usage($1)", [loja])
-    expect(u).toMatchObject({ plano: "inicial", status: "trial", max_profissionais: 2, profissionais_ativos: 2, permite_novos: true })
+    expect(u).toMatchObject({ plano: "inicial", status: "trial", max_profissionais: 5, profissionais_ativos: 5, permite_novos: true })
     await expect(rows(ID.donoB, "select * from get_plan_usage($1)", [loja])).rejects.toThrow(/forbidden/)
     await expect(rows(ID.cli, "select * from get_plan_usage($1)", [loja])).rejects.toThrow(/forbidden/)
   })
@@ -171,7 +170,7 @@ describe("F11-03: eventos de cobrança idempotentes e fora de ordem (T14, T16)",
     const [{ id: caio }] = await rows(ID.dono, "select id from professionals where nome = 'Caio'")
     await val(ID.dono, "select save_professional($1, $2, 'Caio', false, $3)", [loja, caio, [corte]])
     expect(await svcVal("select change_plan($1, 'inicial')", [loja])).toBe("ok")
-    await expect(prof(ID.dono, "Eva")).resolves.toBeTruthy() // só Ana ativa
+    await expect(prof(ID.dono, "Eva")).resolves.toBeTruthy() // 4 ativos: Eva ocupa a 5ª vaga
     await expect(prof(ID.dono, "Fábio")).rejects.toThrow(/plan_limit/)
   })
 
@@ -179,5 +178,57 @@ describe("F11-03: eventos de cobrança idempotentes e fora de ordem (T14, T16)",
     await expect(svc("select change_plan($1, 'ouro')", [loja])).rejects.toThrow(/invalid_plan/)
     await expect(evento("ev-7", "ativada", { shop: "00000000-0000-4000-8000-000000000999" })).rejects.toThrow(/not_found/)
     await expect(evento("ev-8", "inventado")).rejects.toThrow(/invalid_event/)
+  })
+})
+
+describe("diferença para o remoto: limite do Inicial", () => {
+  it("leva o Inicial de 2 para 5 ativos e pode ser reaplicada sem mudar nada", async () => {
+    await sql("update plans set max_profissionais = 2 where id = 'inicial'") // como está no remoto antes
+    const diff = readFileSync("supabase/aplicar/diferenca-limite-equipe.sql", "utf8")
+    await db.exec(diff)
+    await db.exec(diff)
+    expect((await rows(null, "select max_profissionais from plans where id = 'inicial'"))[0].max_profissionais).toBe(5)
+  })
+})
+
+describe("dados: cards do convite inativos só pelo limite antigo (aplicar/dados-ativar-equipe-limite.sql)", () => {
+  const NEX = "c52bed38-8d9f-4eb6-af75-54267a61e87c"
+  const ALI = "00bd1a49-3041-401b-ab85-84a094d00458"
+  const DONO_C = U("c1"), NEX_USER = U("c2"), ALI_USER = U("c3")
+  let lojaC = "", corteC = ""
+  const usoC = async () => (await rows(DONO_C, "select * from get_plan_usage($1)", [lojaC]))[0]
+
+  it("ativa NEX FLOW e Shop Alibrasil (4/5), mantém o desativado de propósito, não duplica e o 6º é recusado", async () => {
+    for (const [id, n] of [[DONO_C, "donoC"], [NEX_USER, "nex"], [ALI_USER, "ali"]]) await sql("insert into auth.users (id, email, raw_user_meta_data) values ($1, $2, $3)", [id, `${n}@example.test`, { full_name: n }])
+    lojaC = await val(DONO_C, "select create_barbershop('Babearia do TICO', 'babearia-do-tico')")
+    corteC = (await rows(DONO_C, "insert into services (barbershop_id, nome, preco_centavos, duracao_min) values ($1, 'Corte', 6000, 40) returning id", [lojaC]))[0].id
+    const profC = (nome: string, ativo = true) => val(DONO_C, "select save_professional($1, null, $2, $3, $4)", [lojaC, nome, ativo, [corteC]])
+    await profC("Francisco Penha")
+    await profC("Marcelo Prado")
+    await profC("Duda", false) // desativado de propósito: não volta
+    // como o convite (0033) gravou no remoto: card inativo + professional.linked no mesmo instante
+    const t = "2026-11-17 13:39:25.220221+00"
+    for (const [id, nome, user] of [[NEX, "NEX FLOW", NEX_USER], [ALI, "Shop Alibrasil", ALI_USER]]) {
+      await sql("insert into professionals (id, barbershop_id, nome, profile_id, ativo, criado_em) values ($1, $2, $3, $4, false, $5)", [id, lojaC, nome, user, t])
+      await sql("insert into audit_logs (barbershop_id, profile_id, acao, detalhes, criado_em) values ($1, $2, 'professional.linked', $3, $4)", [lojaC, user, { professional_id: id, profile_id: user, origem: "convite" }, t])
+    }
+    expect(await usoC()).toMatchObject({ max_profissionais: 5, profissionais_ativos: 2 })
+
+    const fix = readFileSync("supabase/aplicar/dados-ativar-equipe-limite.sql", "utf8")
+    await db.exec(fix)
+    await db.exec(fix) // reaplicar não muda nada
+    const equipe = await sql("select nome, ativo from professionals where barbershop_id = $1 order by nome", [lojaC])
+    expect(equipe).toEqual([
+      { nome: "Duda", ativo: false }, { nome: "Francisco Penha", ativo: true }, { nome: "Marcelo Prado", ativo: true },
+      { nome: "NEX FLOW", ativo: true }, { nome: "Shop Alibrasil", ativo: true },
+    ])
+    expect(await usoC()).toMatchObject({ profissionais_ativos: 4 }) // 4/5
+    expect(await sql("select count(*)::int n from audit_logs where acao = 'professional.activated'")).toEqual([{ n: 2 }])
+
+    const [{ id: duda }] = await rows(DONO_C, "select id from professionals where nome = 'Duda' and barbershop_id = $1", [lojaC])
+    await val(DONO_C, "select save_professional($1, $2, 'Duda', true, $3)", [lojaC, duda, [corteC]])
+    expect(await usoC()).toMatchObject({ profissionais_ativos: 5 }) // 5/5
+    await expect(profC("Sexto")).rejects.toThrow(/plan_limit/) // 6º recusado
+    expect(await usoC()).toMatchObject({ profissionais_ativos: 5 })
   })
 })

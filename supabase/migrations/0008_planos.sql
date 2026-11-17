@@ -17,7 +17,7 @@ create table public.plans (
   ordem integer not null unique
 );
 insert into public.plans (id, nome, max_profissionais, trial_dias, ordem) values
-  ('inicial', 'Inicial', 2, 14, 1),
+  ('inicial', 'Inicial', 5, 14, 1), -- limite provisório (era 2; diferença em aplicar/diferenca-limite-equipe.sql)
   ('profissional', 'Profissional', 6, 14, 2),
   ('rede', 'Rede', null, 14, 3);
 
@@ -118,6 +118,8 @@ begin
   if not private.subscription_allows(new.barbershop_id) then
     raise exception 'subscription_inactive' using errcode = 'P0001';
   end if;
+  -- Trava a assinatura (a mesma de change_plan): ativações simultâneas na barbearia contam uma de cada vez.
+  perform 1 from public.subscriptions where barbershop_id = new.barbershop_id for update;
   select p.max_profissionais into v_max
   from public.subscriptions s join public.plans p on p.id = s.plan_id where s.barbershop_id = new.barbershop_id;
   if v_max is not null then
