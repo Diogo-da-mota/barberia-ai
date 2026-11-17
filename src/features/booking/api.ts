@@ -226,6 +226,13 @@ export async function createInvite(shopId: string, email: string, papel: "gerent
 
 export type InviteRow = { id: string; email: string; papel: string; expires_at: string; aceito_em: string | null }
 
+/** Novo link para um convite pendente (o token é guardado só como hash; o anterior deixa de valer). Só a gestão (0036). */
+export async function renewInvite(inviteId: string): Promise<string> {
+  const { data, error } = await supabase.rpc("renew_invite", { p_invite_id: inviteId })
+  if (error) throw error
+  return data as string
+}
+
 export async function fetchInvites(shopId: string): Promise<InviteRow[]> {
   const { data, error } = await supabase
     .from("invites")

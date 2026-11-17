@@ -40,6 +40,15 @@ describe("serviços de autenticação", () => {
     expect(JSON.parse(localStorage.getItem("barberia:auth-next")!)).toMatchObject({ path: "/dashboard/contas" })
   })
 
+  it("Google no convite da equipe pede a escolha da conta; no login normal (clientes e painel) nada muda", async () => {
+    auth.signInWithOAuth.mockResolvedValue({ error: null })
+    await signInWithGoogle("/convite?token=segredo")
+    expect(auth.signInWithOAuth).toHaveBeenLastCalledWith({ provider: "google", options: { redirectTo: CALLBACK, queryParams: { prompt: "select_account" } } })
+    expect(JSON.stringify(auth.signInWithOAuth.mock.lastCall)).not.toContain("segredo") // o token não sai do navegador
+    await signInWithGoogle("/barbearia-do-tico/minhas-reservas")
+    expect(auth.signInWithOAuth.mock.lastCall![0].options).not.toHaveProperty("queryParams")
+  })
+
   it("repassa o erro do Google", async () => {
     auth.signInWithOAuth.mockResolvedValue({ error: { code: "provider_disabled" } })
 
@@ -52,6 +61,16 @@ describe("serviços de autenticação", () => {
     await signInWithPassword("a@b.co", "segredo")
 
     expect(auth.signInWithPassword).toHaveBeenCalledWith({ email: "a@b.co", password: "segredo" })
+  })
+
+  it("cadastro vindo do convite: o token não vai no link do e-mail nem nos metadados da conta (fica só no destino guardado)", async () => {
+    auth.signUp.mockResolvedValue({ data: { session: null, user: { identities: [] } }, error: null })
+    await signUp({ nome: "Ana", email: "a@b.co", senha: "12345678" }, "/convite?token=segredo123")
+    const payload = auth.signUp.mock.calls[0][0]
+    expect(payload.options.emailRedirectTo).toBe(`${CALLBACK}&tipo=cadastro&volta=%2Fconvite`)
+    expect(payload.options.data.signup_next).toBe("/convite")
+    expect(JSON.stringify(payload)).not.toContain("segredo123")
+    expect(localStorage.getItem("barberia:auth-next") ?? JSON.stringify(localStorage)).toContain("segredo123")
   })
 
   it("cadastro envia só o nome de exibição, sem papel ou permissão", async () => {

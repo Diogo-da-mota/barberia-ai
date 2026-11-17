@@ -1,0 +1,190 @@
+// Teste de navegador do aceite de convite (Chrome real + SQL real): a tela /convite roda no Chrome e cada chamada ao
+// Supabase é atendida por um PostgreSQL local (PGlite) com as migrations de verdade (0001–0004, 0008, 0033, 0035).
+// Assim a recusa vem do banco (accept_invite), não só da tela. Contas e convites são fictícios; nada vai para produção.
+// O login real do Google não roda aqui: a conta "Google" entra com sessão simulada (provedor google, e-mail confirmado).
+// Uso (servidor local no ar):  cp este arquivo para <pasta>/convite.e2e.mjs  e  node <pasta>/convite.e2e.mjs <repo> <pasta-de-capturas>
+import { createRequire } from "node:module"
+import { readFileSync } from "node:fs"
+const require = createRequire("/Users/diogomota/.npm/_npx/b234c773f454f454/node_modules/")
+const { chromium } = require("playwright-core")
+const REPO = process.argv[2], OUT = process.argv[3]
+const { PGlite } = await import(`${REPO}/node_modules/@electric-sql/pglite/dist/index.js`)
+const { btree_gist } = await import(`${REPO}/node_modules/@electric-sql/pglite/dist/contrib/btree_gist.js`)
+
+// ---------- banco local com o SQL do projeto ----------
+const db = new PGlite({ extensions: { btree_gist } })
+await db.exec(`
+  create role anon nologin; create role authenticated nologin; create role service_role nologin; create schema auth;
+  create table auth.users (id uuid primary key, email text, email_confirmed_at timestamptz, raw_user_meta_data jsonb not null default '{}', raw_app_meta_data jsonb not null default '{}');
+  create function auth.uid() returns uuid language sql stable as $$ select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid $$;
+  grant usage on schema auth to anon, authenticated; grant execute on function auth.uid() to anon, authenticated;
+  alter default privileges in schema public grant all on tables to anon, authenticated;
+`)
+for (const f of ["0001_identidade_inicial", "0002_catalogo", "0003_agenda", "0004_barbeiro", "0008_planos", "0033_convite_equipe", "0035_convite_email"]) await db.exec(readFileSync(`${REPO}/supabase/migrations/${f}.sql`, "utf8"))
+const U = (n) => `00000000-0000-4000-8000-0000000000${n}`
+const P = {
+  dono: { id: U("a1"), email: "dono.teste@example.test", nome: "Dono Teste", provider: "email", conf: true },
+  certo: { id: U("b1"), email: "certo.teste@example.test", nome: "Certo Teste", provider: "email", conf: true },
+  google: { id: U("b2"), email: "google.teste@example.test", nome: "Google Teste", provider: "google", conf: true },
+  outro: { id: U("b3"), email: "outro.teste@example.test", nome: "Outro Teste", provider: "email", conf: true },
+  pendente: { id: U("b4"), email: "pendente.teste@example.test", nome: "Pendente Teste", provider: "email", conf: false },
+}
+for (const p of Object.values(P)) await db.query("insert into auth.users values ($1, $2, $3, $4, $5)", [p.id, p.email, p.conf ? new Date().toISOString() : null, { full_name: p.nome }, { provider: p.provider, providers: [p.provider] }])
+async function as(uid, sql, params = []) {
+  await db.exec("reset role"); await db.query("select set_config('request.jwt.claim.sub', $1, false)", [uid ?? ""]); await db.exec(`set role ${uid ? "authenticated" : "anon"}`)
+  try { return (await db.query(sql, params)).rows } finally { await db.exec("reset role") }
+}
+const one = async (uid, sql, params) => Object.values((await as(uid, sql, params))[0])[0]
+const loja = await one(P.dono.id, "select create_barbershop('Barbearia Teste Convite', 'barbearia-teste-convite')")
+const invite = (email, papel = "barbeiro") => one(P.dono.id, "select create_invite($1, $2, $3)", [loja, email, papel])
+const T = { certo: await invite(P.certo.email), google: await invite(P.google.email), pendente: await invite(P.pendente.email), expirado: await invite(P.outro.email) }
+await db.query("update invites set expires_at = now() - interval '1 minute' where email = $1", [P.outro.email])
+const membros = async (uid) => (await db.query("select papel from memberships where barbershop_id = $1 and profile_id = $2", [loja, uid])).rows.length
+const cardsDe = async (uid) => (await db.query("select count(*)::int n from professionals where barbershop_id = $1 and profile_id = $2", [loja, uid])).rows[0].n
+
+// ---------- navegador ----------
+const b64 = (o) => Buffer.from(JSON.stringify(o)).toString("base64url")
+const exp = () => Math.floor(Date.now() / 1000) + 3600
+const userOf = (p) => ({ id: p.id, aud: "authenticated", role: "authenticated", email: p.email, email_confirmed_at: p.conf ? new Date().toISOString() : null, app_metadata: { provider: p.provider, providers: [p.provider] }, user_metadata: { full_name: p.nome }, identities: [], created_at: new Date().toISOString() })
+const sessionOf = (p) => ({ access_token: `${b64({ alg: "none" })}.${b64({ sub: p.id, exp: exp(), role: "authenticated", amr: [{ method: p.provider === "google" ? "oauth" : "password", timestamp: Math.floor(Date.now() / 1000) }] })}.teste`, refresh_token: "teste", token_type: "bearer", expires_in: 3600, expires_at: exp(), user: userOf(p) })
+const subOf = (req) => { try { return JSON.parse(Buffer.from((req.headers()["authorization"] ?? "").split(" ")[1].split(".")[1], "base64url").toString()).sub ?? null } catch { return null } }
+let supabaseOrigin = ""
+const authorizeUrls = []
+
+async function open(person, { width = 1440, height = 900 } = {}) {
+  const browser = await chromium.launch({ channel: "chrome", headless: true })
+  const context = await browser.newContext({ viewport: { width, height }, hasTouch: width < 768 })
+  const page = await context.newPage()
+  const errors = []
+  page.on("pageerror", (e) => errors.push(e.message))
+  await context.addInitScript(({ s }) => { localStorage.setItem("barberia:theme", "dark"); if (s) localStorage.setItem("barberia-auth-painel", JSON.stringify(s)) }, { s: person ? sessionOf(person) : null })
+  await context.route(/supabase\.co|cloudfront\.net/, async (route) => {
+    const req = route.request(), url = new URL(req.url()), p = url.pathname
+    const json = (b, st = 200) => route.fulfill({ status: st, contentType: "application/json", body: JSON.stringify(b) })
+    if (!url.hostname.includes("supabase")) return route.fulfill({ status: 404, body: "" })
+    supabaseOrigin = url.origin
+    const sub = subOf(req), who = Object.values(P).find((x) => x.id === sub)
+    if (p === "/auth/v1/user") return who ? json(userOf(who)) : json({ message: "no session" }, 401)
+    if (p === "/auth/v1/logout") return route.fulfill({ status: 204, body: "" })
+    if (p === "/auth/v1/authorize") { authorizeUrls.push(req.url()); return route.fulfill({ status: 200, contentType: "text/html", body: "<p>Google (simulado)</p>" }) }
+    if (p.startsWith("/auth/")) return json(who ? sessionOf(who) : {})
+    if (p.includes("/rpc/")) {
+      const fn = p.split("/rpc/")[1], body = JSON.parse(req.postData() ?? "{}")
+      try {
+        if (fn === "accept_invite") return json(await one(sub, "select accept_invite($1)", [body.p_token]))
+        if (fn === "get_plan_usage") return json(await as(sub, "select * from get_plan_usage($1)", [body.p_barbershop_id]))
+      } catch (e) { return json({ code: e.code ?? "P0001", message: e.message, details: null, hint: null }, 400) }
+      return json([])
+    }
+    const t = p.replace("/rest/v1/", "")
+    if (t === "memberships" && url.searchParams.get("profile_id")) return json(await as(sub, "select m.papel, json_build_object('id', b.id, 'nome', b.nome, 'slug', b.slug, 'endereco', null, 'status', 'ativo', 'fuso', 'America/Sao_Paulo') barbershops from memberships m join barbershops b on b.id = m.barbershop_id where m.profile_id = $1", [sub]))
+    if (t === "professionals") return json(await as(sub, "select id, nome, ativo, avatar_path, '[]'::json professional_services from professionals where barbershop_id = $1 order by nome", [loja]))
+    return json(req.headers()["accept"]?.includes("vnd.pgrst.object") ? null : [])
+  })
+  return { browser, page, errors }
+}
+
+let ok = 0, bad = 0
+const check = (name, pass, detail = "") => { pass ? ok++ : bad++; console.log(`${pass ? "PASS" : "FAIL"}  ${name}${detail ? `  (${detail})` : ""}`) }
+const BLOQ = "Este convite pertence a outra conta. Entre com a conta do e-mail convidado para continuar."
+const aceitar = async (page, token) => {
+  await page.goto(`http://localhost:5173/convite?token=${token}`, { waitUntil: "load" })
+  await page.getByRole("button", { name: "Aceitar convite" }).click({ timeout: 15000 })
+}
+
+// 1 e 2: outra conta (e-mail diferente, confirmado) — tela e backend
+for (const [w, h] of [[1440, 900], [390, 844]]) {
+  const { browser, page, errors } = await open(P.outro, { width: w, height: h })
+  await aceitar(page, T.certo)
+  const alerta = page.getByRole("alert")
+  await alerta.waitFor({ timeout: 10000 })
+  check(`${w}px 1. outro e-mail abre o link → BLOQUEADO com o aviso`, (await alerta.textContent())?.includes(BLOQ))
+  check(`${w}px 1. botão Entrar com outra conta no lugar de Aceitar`, await page.getByRole("button", { name: "Entrar com outra conta" }).isVisible() && !(await page.getByRole("button", { name: "Aceitar convite" }).isVisible()))
+  await page.screenshot({ path: `${OUT}/convite-outro-email-${w}.png` })
+  if (w === 1440) {
+    const direto = await page.evaluate(async ({ origin, token, jwt }) => {
+      const r = await fetch(`${origin}/rest/v1/rpc/accept_invite`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${jwt}`, apikey: "x" }, body: JSON.stringify({ p_token: token }) })
+      return { status: r.status, body: await r.json() }
+    }, { origin: supabaseOrigin, token: T.certo, jwt: sessionOf(P.outro).access_token })
+    check("2. aceite direto pelo backend com outro e-mail → BLOQUEADO", direto.status === 400 && direto.body.message === "invite_wrong_email", JSON.stringify(direto.body.message))
+    check("2. nada criado para a outra conta (membro/card)", (await membros(P.outro.id)) === 0 && (await cardsDe(P.outro.id)) === 0)
+    await page.getByRole("button", { name: "Entrar com outra conta" }).click()
+    await page.locator('input[type="password"]').first().waitFor({ timeout: 10000 })
+    check("1. Entrar com outra conta: sai da sessão e abre o login", await page.locator('input[type="password"]').first().isVisible())
+    await page.screenshot({ path: `${OUT}/convite-trocar-conta-${w}.png` })
+  }
+  check(`${w}px sem erro de página`, errors.length === 0, errors.join(" | "))
+  await browser.close()
+}
+
+// 5: e-mail não confirmado
+{
+  const { browser, page } = await open(P.pendente)
+  await aceitar(page, T.pendente)
+  const alerta = page.getByRole("alert"); await alerta.waitFor({ timeout: 10000 })
+  check("5. e-mail não confirmado → BLOQUEADO", (await alerta.textContent())?.includes("Confirme seu e-mail") && (await membros(P.pendente.id)) === 0)
+  await browser.close()
+}
+
+// 7: convite expirado (mesmo com o e-mail certo)
+{
+  const { browser, page } = await open(P.outro)
+  await aceitar(page, T.expirado)
+  const alerta = page.getByRole("alert"); await alerta.waitFor({ timeout: 10000 })
+  check("7. convite expirado → BLOQUEADO", (await alerta.textContent())?.includes("Convite inválido, expirado ou já usado") && (await membros(P.outro.id)) === 0)
+  await browser.close()
+}
+
+// 3, 6: e-mail e senha com o e-mail certo → PERMITIDO; reutilizar → BLOQUEADO
+{
+  const { browser, page } = await open(P.certo)
+  await aceitar(page, T.certo)
+  await page.waitForURL(/\/dashboard/, { timeout: 15000 })
+  check("3. e-mail correto (e-mail/senha) → PERMITIDO e vai ao painel", (await membros(P.certo.id)) === 1 && (await cardsDe(P.certo.id)) === 1)
+  await aceitar(page, T.certo)
+  const alerta = page.getByRole("alert"); await alerta.waitFor({ timeout: 10000 })
+  check("6. reutilizar convite aceito → BLOQUEADO, sem duplicar", (await alerta.textContent())?.includes("Convite inválido, expirado ou já usado") && (await membros(P.certo.id)) === 1 && (await cardsDe(P.certo.id)) === 1)
+  await browser.close()
+}
+
+// 4: conta Google com o e-mail certo → PERMITIDO
+{
+  const { browser, page } = await open(P.google)
+  await aceitar(page, T.google)
+  await page.waitForURL(/\/dashboard/, { timeout: 15000 })
+  check("4. conta Google com o e-mail correto → PERMITIDO", (await membros(P.google.id)) === 1 && (await cardsDe(P.google.id)) === 1)
+  await browser.close()
+}
+
+// 8: dono abre a Equipe → cada aceito aparece uma vez
+{
+  const { browser, page } = await open(P.dono)
+  await page.goto("http://localhost:5173/equipe", { waitUntil: "load" })
+  await page.getByRole("heading", { name: /Certo Teste/ }).waitFor({ timeout: 15000 })
+  const n = async (nome) => page.getByRole("heading", { name: new RegExp(nome) }).count()
+  check("8. Equipe mostra quem aceitou, sem duplicar", (await n("Certo Teste")) === 1 && (await n("Google Teste")) === 1 && (await n("Outro Teste")) === 0 && (await n("Pendente Teste")) === 0)
+  await page.screenshot({ path: `${OUT}/convite-equipe-1440.png` })
+  await browser.close()
+}
+
+// 9: Google no convite pede a escolha da conta (sem o token na URL); a porta do cliente continua igual
+{
+  const { browser, page } = await open(null)
+  await page.goto(`http://localhost:5173/convite?token=${T.google}`, { waitUntil: "load" })
+  await page.getByRole("button", { name: "Entrar para aceitar" }).click({ timeout: 15000 })
+  await page.getByRole("button", { name: "Continuar com Google" }).click()
+  await page.waitForURL(/\/auth\/v1\/authorize/, { timeout: 10000 })
+  const convite = new URL(authorizeUrls.at(-1))
+  check("9. Google no convite: escolha de conta obrigatória (prompt=select_account)", convite.searchParams.get("provider") === "google" && convite.searchParams.get("prompt") === "select_account")
+  check("9. o token do convite não vai para o Google nem para o Supabase Auth", !authorizeUrls.at(-1).includes(T.google))
+  await page.goto("http://localhost:5173/acesso", { waitUntil: "load" })
+  await page.getByRole("button", { name: "Entrar", exact: true }).click({ timeout: 15000 })
+  await page.getByRole("button", { name: "Continuar com Google" }).click()
+  await page.waitForURL(/\/auth\/v1\/authorize/, { timeout: 10000 })
+  check("9. login normal do cliente (/acesso): sem mudança, nada de prompt", new URL(authorizeUrls.at(-1)).searchParams.get("prompt") === null)
+  await browser.close()
+}
+
+console.log(`\n${ok} PASS, ${bad} FAIL`)
+await db.close()
+process.exit(bad ? 1 : 0)

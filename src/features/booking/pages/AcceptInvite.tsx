@@ -5,6 +5,7 @@ import { PublicHeader } from "@/app/PublicHeader"
 import { AuthDialog } from "@/features/auth/components/AuthDialog"
 import type { AuthView } from "@/features/auth/domain"
 import { useAuth } from "@/features/auth/hooks/useAuth"
+import { signOut } from "@/features/auth/services/auth"
 import { Button } from "@/ui/button"
 import { EmptyState, Panel } from "@/ui/finance"
 import { toast } from "@/ui/sonner"
@@ -20,15 +21,21 @@ export function AcceptInvite() {
   const { session, loading } = useAuth()
   const [authView, setAuthView] = useState<AuthView | null>(null)
   const [error, setError] = useState<string | null>(null)
+  // o servidor recusou porque a conta logada não é a do e-mail do convite: troca de conta em vez de tentar de novo
+  const [wrongAccount, setWrongAccount] = useState(false)
 
   const accept = useMutation({
     mutationFn: () => acceptInvite(token),
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["my-barbershops"] })
+      // a Equipe passa a mostrar o novo profissional (barbeiro) ou membro (gerente)
+      for (const key of ["my-barbershops", "professionals", "barbers", "team-links", "members", "plan-usage"]) await queryClient.invalidateQueries({ queryKey: [key] })
       toast.success("Convite aceito.")
       navigate("/dashboard", { replace: true })
     },
-    onError: (e) => setError(bookingErrorMessage(e)),
+    onError: (e) => {
+      setWrongAccount((e as { message?: string } | null)?.message === "invite_wrong_email")
+      setError(bookingErrorMessage(e))
+    },
   })
 
   return (
@@ -44,7 +51,11 @@ export function AcceptInvite() {
               {session ? "Aceite para entrar na equipe da barbearia. O convite vale para o email que o recebeu." : "Entre ou crie uma conta com o email que recebeu o convite."}
             </p>
             {error && <p role="alert" className="rounded-md border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-danger">{error}</p>}
-            {session ? (
+            {session && wrongAccount ? (
+              <Button className="h-11 md:h-10" onClick={async () => { await signOut().catch(() => undefined); setError(null); setWrongAccount(false); setAuthView("entrar") }}>
+                Entrar com outra conta
+              </Button>
+            ) : session ? (
               <Button className="h-11 md:h-10" disabled={accept.isPending || loading} onClick={() => { setError(null); accept.mutate() }}>
                 {accept.isPending ? "Aceitando…" : "Aceitar convite"}
               </Button>

@@ -9,8 +9,11 @@ import { rememberNext, safeNext } from "../domain"
  * Os modelos de e-mail (supabase/email-templates) acrescentam `#token_hash=…&type=…` a este endereço (`{{ .RedirectTo }}`):
  * depois do `#`, o token não chega a servidor nem a log.
  */
+/** Destino que pode sair do navegador (link do e-mail, metadados da conta): sem o token do convite, que fica só no destino guardado aqui. */
+const shareableNext = (next: string) => safeNext(next).replace(/^\/convite\?.*$/, "/convite")
+
 function callbackUrl(tipo?: "cadastro" | "recuperar", next?: string) {
-  const volta = next ? `&volta=${encodeURIComponent(safeNext(next))}` : ""
+  const volta = next ? `&volta=${encodeURIComponent(shareableNext(next))}` : ""
   return `${window.location.origin}${CALLBACK_PATH}?area=${currentArea()}${tipo ? `&tipo=${tipo}` : ""}${volta}`
 }
 
@@ -21,6 +24,9 @@ export async function signInWithGoogle(next = "/dashboard") {
     provider: "google",
     options: {
       redirectTo: callbackUrl(),
+      // convite da equipe: o Google sempre pergunta qual conta usar (sem entrar sozinho com a conta já aberta no navegador).
+      // Não impede criar conta com outro e-mail (o Supabase cria antes de voltar); quem barra é o aceite no servidor (0035).
+      ...(next.startsWith("/convite") ? { queryParams: { prompt: "select_account" } } : {}),
     },
   })
   if (error) {
@@ -45,7 +51,7 @@ export async function signUp(account: { nome: string; email: string; senha: stri
       emailRedirectTo: callbackUrl("cadastro", next),
       // signup_next: destino ao confirmar o e-mail em outro aparelho (só navegação, validada por safeNext)
       // whatsapp: o banco copia para profiles.whatsapp ao criar a conta (só dígitos válidos)
-      data: { full_name: account.nome, signup_next: safeNext(next), ...(account.whatsapp ? { whatsapp: account.whatsapp } : {}) },
+      data: { full_name: account.nome, signup_next: shareableNext(next), ...(account.whatsapp ? { whatsapp: account.whatsapp } : {}) },
     },
   })
   if (error) {

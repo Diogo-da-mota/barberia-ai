@@ -1,12 +1,12 @@
 import { useState, type FormEvent } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Copy } from "lucide-react"
-import { createInvite, fetchInvites } from "@/features/booking/api"
+import { createInvite, fetchInvites, renewInvite } from "@/features/booking/api"
 import { bookingErrorMessage, formatDateTime } from "@/features/booking/domain"
 import type { MyBarbershop } from "@/features/home/domain"
 import { Button } from "@/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/ui/dialog"
-import { Field } from "@/ui/finance"
+import { Field, Panel } from "@/ui/finance"
 import { Input } from "@/ui/input"
 import { toast } from "@/ui/sonner"
 
@@ -17,7 +17,6 @@ export function InviteDialog({ shop, open, onOpenChange }: { shop: MyBarbershop;
   const queryClient = useQueryClient()
   const [link, setLink] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const invites = useQuery({ queryKey: ["invites", shop.id], queryFn: () => fetchInvites(shop.id), enabled: open })
   const isOwner = shop.papel === "proprietario"
 
   const invite = useMutation({
@@ -70,20 +69,53 @@ export function InviteDialog({ shop, open, onOpenChange }: { shop: MyBarbershop;
           </div>
         )}
 
-        {invites.data && invites.data.length > 0 && (
-          <div className="flex flex-col gap-1">
-            <h3 className="text-sm font-medium">Convites enviados</h3>
-            <ul className="max-h-40 divide-y divide-border overflow-y-auto text-sm" aria-label="Convites enviados">
-              {invites.data.map((i) => (
-                <li key={i.id} className="flex flex-wrap items-center justify-between gap-x-3 py-1.5">
-                  <span className="min-w-0 truncate">{i.email} · {i.papel === "gerente" ? "Gerente" : "Barbeiro"}</span>
-                  <span className="text-xs text-muted-foreground">{i.aceito_em ? "Aceito" : new Date(i.expires_at) < new Date() ? "Expirado" : `Válido até ${formatDateTime(i.expires_at, shop.fuso ?? "America/Sao_Paulo")}`}</span>
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
       </DialogContent>
     </Dialog>
+  )
+}
+
+/** Histórico dos convites (fica abaixo dos cards da Equipe, fora do pop-up). Some quando não há convites. */
+export function InviteHistory({ shop }: { shop: MyBarbershop }) {
+  const queryClient = useQueryClient()
+  const invites = useQuery({ queryKey: ["invites", shop.id], queryFn: () => fetchInvites(shop.id) })
+  const [manual, setManual] = useState<{ id: string; link: string } | null>(null)
+  // o link antigo não pode ser lido (só o hash fica no banco): renova no mesmo convite, copia e o anterior deixa de valer
+  const renew = useMutation({
+    mutationFn: async (id: string) => ({ id, link: `${window.location.origin}/convite?token=${await renewInvite(id)}` }),
+    onSuccess: async ({ id, link }) => {
+      await queryClient.invalidateQueries({ queryKey: ["invites", shop.id] })
+      try {
+        await navigator.clipboard.writeText(link)
+        setManual(null)
+        toast.success("Link copiado!", { description: "O link anterior deste convite deixou de valer." })
+      } catch {
+        setManual({ id, link }) // sem acesso à área de transferência: mostra o link para copiar à mão
+      }
+    },
+    onError: (e) => toast.error(bookingErrorMessage(e)),
+  })
+  if (!invites.data?.length) return null
+  return (
+    <Panel className="flex flex-col gap-1 p-4">
+      <h3 className="text-sm font-medium">Histórico de convites</h3>
+      <ul className="divide-y divide-border text-sm" aria-label="Histórico de convites">
+        {invites.data.map((i) => (
+          <li key={i.id} className="flex flex-wrap items-center justify-between gap-x-3 py-1.5">
+            <span className="min-w-0 truncate">{i.email} · {i.papel === "gerente" ? "Gerente" : "Barbeiro"}</span>
+            <span className="flex items-center gap-1 text-xs text-muted-foreground">
+              {i.aceito_em ? "Aceito" : new Date(i.expires_at) < new Date() ? "Expirado" : `Válido até ${formatDateTime(i.expires_at, shop.fuso ?? "America/Sao_Paulo")}`}
+              {/* só pendente e válido; convite de gerente só o proprietário renova */}
+              {!i.aceito_em && new Date(i.expires_at) > new Date() && (i.papel === "barbeiro" || shop.papel === "proprietario") && (
+                <Button type="button" variant="ghost" size="icon" className="h-9 w-9" disabled={renew.isPending} onClick={() => renew.mutate(i.id)}
+                  aria-label={`Copiar link do convite de ${i.email}`} title="Copiar link (gera um novo; o anterior deixa de valer)">
+                  <Copy aria-hidden="true" className="h-4 w-4" />
+                </Button>
+              )}
+            </span>
+            {manual?.id === i.id && <Input readOnly aria-label="Link do convite" value={manual.link} className={`${FIELD} mt-1 w-full`} onFocus={(e) => e.currentTarget.select()} />}
+          </li>
+        ))}
+      </ul>
+    </Panel>
   )
 }

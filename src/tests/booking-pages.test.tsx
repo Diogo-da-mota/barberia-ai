@@ -351,7 +351,7 @@ describe("Minhas reservas", () => {
 
 describe("Agenda da gestão", () => {
   const today = () => booking({ id: "b9", inicio: new Date(Date.now() - 60_000).toISOString(), fim: new Date(Date.now() + 39 * 60_000).toISOString() })
-  const open = () => renderAt("/dashboard/agendamentos", "/dashboard/agendamentos", <Agenda />)
+  const open = () => renderAt("/agendamentos", "/agendamentos", <Agenda />)
 
   it("lista o dia com ações de concluir, faltou e cancelar", async () => {
     m.fetchShopBookings.mockResolvedValue([today()])
@@ -359,7 +359,11 @@ describe("Agenda da gestão", () => {
     const row = (await screen.findByText("Corte")).closest("li")!
     expect(within(row).queryByRole("button", { name: "Reagendar" })).not.toBeInTheDocument()
     expect(within(row).getByText(/Cliente Um/)).toBeInTheDocument()
-    expect(within(row).getByRole("link", { name: /WhatsApp \+55 11 91234-5678/ })).toHaveAttribute("href", "https://wa.me/5511912345678")
+    const zap = within(row).getByRole("link", { name: /WhatsApp \+55 11 91234-5678/ })
+    expect(zap).toHaveAttribute("href", "https://wa.me/5511912345678")
+    expect(zap.querySelector("svg")).not.toBeNull() // ícone no lugar da palavra "WhatsApp"
+    expect(zap).toHaveTextContent(/^\+55 11 91234-5678$/)
+    expect(zap.closest("p")).toHaveTextContent(/^Cliente Um/) // linha 1: cliente + ícone + telefone
     fireEvent.click(within(row).getByRole("button", { name: "Concluir" }))
     await waitFor(() => expect(m.setBookingStatus).toHaveBeenCalledWith("b9", "concluido"))
     fireEvent.click(within(row).getByRole("button", { name: "Faltou" }))
@@ -443,7 +447,7 @@ describe("Banco ainda sem a migration da agenda", () => {
   it("a agenda e as reservas explicam o estado em vez de mostrar erro genérico", async () => {
     m.fetchShopBookings.mockRejectedValue(missing)
     m.fetchBlocks.mockRejectedValue(missing)
-    renderAt("/dashboard/agendamentos", "/dashboard/agendamentos", <Agenda />)
+    renderAt("/agendamentos", "/agendamentos", <Agenda />)
     expect(await screen.findByText("Agenda indisponível")).toBeInTheDocument()
     expect(screen.queryByRole("alert")).not.toBeInTheDocument()
   })
@@ -461,9 +465,9 @@ describe("Banco ainda sem a migration da agenda", () => {
   })
 })
 
-describe("Clientes (/dashboard/clientes)", () => {
+describe("Clientes (/clientes)", () => {
   const row = (id: string, nome: string, status: string, dias: number) => ({ customer_id: id, cliente_nome: nome, cliente_whatsapp: "11912345678", status, preco_centavos: 6000, inicio: new Date(Date.now() + dias * 86_400_000).toISOString() })
-  const open = () => renderAt("/dashboard/clientes", "/dashboard/clientes", <Customers />)
+  const open = () => renderAt("/clientes", "/clientes", <Customers />)
 
   it("lista os clientes com histórico e total gasto, e filtra pela busca", async () => {
     m.fetchCustomerBookings.mockResolvedValue([row("a", "Maria Souza", "concluido", -5), row("a", "Maria Souza", "nao_compareceu", -9), row("b", "João Lima", "confirmado", 3)])
@@ -571,7 +575,7 @@ describe("Horários de atendimento", () => {
 
   it("carrega a jornada, liga um dia, escolhe os horários e salva", async () => {
     m.fetchWorkingHours.mockResolvedValue([{ dow: 1, inicio_min: 540, fim_min: 720 }, { dow: 1, inicio_min: 780, fim_min: 1080 }])
-    renderAt("/dashboard/equipe", "/dashboard/equipe", <WorkingHoursEditor professionalId="p1" />)
+    renderAt("/equipe", "/equipe", <WorkingHoursEditor professionalId="p1" />)
 
     // segunda com almoço: abre 09:00, sai 12:00, volta 13:00, fecha 18:00
     expect(await screen.findByLabelText("Segunda-feira, abre")).toHaveTextContent("09:00")
@@ -593,7 +597,7 @@ describe("Horários de atendimento", () => {
 
   it("dia sem almoço volta do banco com abre e fecha; o almoço é opcional e some ao desmarcar", async () => {
     m.fetchWorkingHours.mockResolvedValue([{ dow: 3, inicio_min: 480, fim_min: 1020 }])
-    renderAt("/dashboard/equipe", "/dashboard/equipe", <WorkingHoursEditor professionalId="p1" />)
+    renderAt("/equipe", "/equipe", <WorkingHoursEditor professionalId="p1" />)
     expect(await screen.findByLabelText("Quarta-feira, abre")).toHaveTextContent("08:00")
     expect(screen.getByLabelText("Quarta-feira, fecha")).toHaveTextContent("17:00")
     expect(screen.queryByLabelText("Quarta-feira, sai para o almoço")).not.toBeInTheDocument()
@@ -606,7 +610,7 @@ describe("Horários de atendimento", () => {
 
   it("desligar um dia vira folga e copiar a segunda preenche de terça a sexta", async () => {
     m.fetchWorkingHours.mockResolvedValue([{ dow: 1, inicio_min: 540, fim_min: 1080 }])
-    renderAt("/dashboard/equipe", "/dashboard/equipe", <WorkingHoursEditor professionalId="p1" />)
+    renderAt("/equipe", "/equipe", <WorkingHoursEditor professionalId="p1" />)
     await screen.findByLabelText("Segunda-feira, abre")
     fireEvent.click(screen.getByRole("button", { name: /Copiar segunda para seg–sex/ }))
     fireEvent.click(screen.getByRole("switch", { name: "Sexta-feira: atende" })) // desliga a sexta
@@ -616,7 +620,7 @@ describe("Horários de atendimento", () => {
 
   it("os horários são de 15 em 15 minutos", async () => {
     m.fetchWorkingHours.mockResolvedValue([])
-    renderAt("/dashboard/equipe", "/dashboard/equipe", <WorkingHoursEditor professionalId="p1" />)
+    renderAt("/equipe", "/equipe", <WorkingHoursEditor professionalId="p1" />)
     fireEvent.click(await screen.findByRole("switch", { name: "Segunda-feira: atende" }))
     fireEvent.click(screen.getByLabelText("Segunda-feira, abre"))
     const minutos = within(screen.getByRole("listbox", { name: "Minutos" })).getAllByRole("option").map((o) => o.textContent)
@@ -625,7 +629,7 @@ describe("Horários de atendimento", () => {
 
   it("dia ligado ou almoço marcado sem horários não salva e explica o que falta", async () => {
     m.fetchWorkingHours.mockResolvedValue([])
-    renderAt("/dashboard/equipe", "/dashboard/equipe", <WorkingHoursEditor professionalId="p1" />)
+    renderAt("/equipe", "/equipe", <WorkingHoursEditor professionalId="p1" />)
     fireEvent.click(await screen.findByRole("switch", { name: "Quinta-feira: atende" }))
     fireEvent.click(screen.getByRole("button", { name: "Salvar horários" }))
     expect(await screen.findByRole("alert")).toHaveTextContent("Quinta-feira: escolha o horário em que abre e em que fecha")
@@ -639,7 +643,7 @@ describe("Horários de atendimento", () => {
 
   it("não salva com horário inválido", async () => {
     m.fetchWorkingHours.mockResolvedValue([])
-    renderAt("/dashboard/equipe", "/dashboard/equipe", <WorkingHoursEditor professionalId="p1" />)
+    renderAt("/equipe", "/equipe", <WorkingHoursEditor professionalId="p1" />)
     await screen.findByRole("switch", { name: "Quarta-feira: atende" })
     fireEvent.click(screen.getByRole("switch", { name: "Quarta-feira: atende" }))
     pickTime("Quarta-feira, abre", "10:00")
@@ -652,7 +656,7 @@ describe("Horários de atendimento", () => {
 })
 
 describe("Mais", () => {
-  const open = () => renderAt("/dashboard/mais", "/dashboard/mais", <More />)
+  const open = () => renderAt("/mais", "/mais", <More />)
   beforeEach(() => {
     m.fetchShopDetails.mockResolvedValue({ supported: false, nome: "Barbearia Teste", nome_exibicao: null, descricao: null, telefone: null, whatsapp: null, email_comercial: null, endereco: "Rua Um", cep: null, logradouro: null, numero: null, complemento: null, bairro: null, cidade: null, uf: null, cor_destaque: null, fuso: "America/Sao_Paulo" })
     m.fetchFiscal.mockResolvedValue({ supported: false, data: null })
@@ -688,11 +692,40 @@ describe("Aceitar convite", () => {
     m.acceptInvite.mockRejectedValueOnce({ message: "invalid_invite" })
     renderAt("/convite?token=tok", "/convite", <AcceptInvite />)
     fireEvent.click(await screen.findByRole("button", { name: "Aceitar convite" }))
-    expect(await screen.findByRole("alert")).toHaveTextContent("Convite inválido, expirado ou enviado para outro email.")
+    expect(await screen.findByRole("alert")).toHaveTextContent("Convite inválido, expirado ou já usado.")
 
     m.acceptInvite.mockResolvedValue("loja-1")
     fireEvent.click(screen.getByRole("button", { name: "Aceitar convite" }))
     await waitFor(() => expect(m.acceptInvite).toHaveBeenLastCalledWith("tok"))
+  })
+
+  it("conta de outro e-mail: o servidor recusa, aparece o aviso e o botão Entrar com outra conta (sai só desta sessão e abre o login)", async () => {
+    m.acceptInvite.mockRejectedValueOnce({ message: "invite_wrong_email" })
+    m.signOut.mockResolvedValue(undefined)
+    renderAt("/convite?token=tok", "/convite", <AcceptInvite />)
+    fireEvent.click(await screen.findByRole("button", { name: "Aceitar convite" }))
+    expect(await screen.findByRole("alert")).toHaveTextContent("Este convite pertence a outra conta. Entre com a conta do e-mail convidado para continuar.")
+    expect(screen.queryByRole("button", { name: "Aceitar convite" })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: "Entrar com outra conta" }))
+    await waitFor(() => expect(m.signOut).toHaveBeenCalledWith())
+    expect(m.acceptInvite).toHaveBeenCalledTimes(1)
+  })
+
+  it("e-mail não confirmado: aviso para confirmar", async () => {
+    m.acceptInvite.mockRejectedValueOnce({ message: "email_not_confirmed" })
+    renderAt("/convite?token=tok", "/convite", <AcceptInvite />)
+    fireEvent.click(await screen.findByRole("button", { name: "Aceitar convite" }))
+    expect(await screen.findByRole("alert")).toHaveTextContent("Confirme seu e-mail antes de aceitar o convite.")
+  })
+
+  it("depois de aceitar, a Equipe (profissionais, contas e gerentes) é buscada de novo", async () => {
+    const invalidate = vi.spyOn(QueryClient.prototype, "invalidateQueries")
+    m.acceptInvite.mockResolvedValue("loja-1")
+    renderAt("/convite?token=tok", "/convite", <AcceptInvite />)
+    fireEvent.click(await screen.findByRole("button", { name: "Aceitar convite" }))
+    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["professionals"] }))
+    for (const key of ["barbers", "team-links", "members"]) expect(invalidate).toHaveBeenCalledWith({ queryKey: [key] })
+    invalidate.mockRestore()
   })
 })
 
@@ -885,7 +918,7 @@ describe("Pop-up de detalhes do serviço (página pública)", () => {
 
 describe("faixa fotográfica nas páginas da equipe", () => {
   it("a agenda da equipe tem a faixa 'agenda' atrás do título Agendamentos", async () => {
-    renderAt("/dashboard/agendamentos", "/dashboard/agendamentos", <Agenda />)
+    renderAt("/agendamentos", "/agendamentos", <Agenda />)
     const titulo = await screen.findByRole("heading", { name: "Agendamentos" })
     expect(titulo.closest('[data-banner="agenda"]')).not.toBeNull()
   })
