@@ -153,23 +153,58 @@ describe("duas sessões: painel e cliente", () => {
     expect(cliente.exchangeCodeForSession).toHaveBeenCalledWith("codigo-1")
   })
 
-  it("link do e-mail (token_hash) é verificado só no cliente da área, uma única vez, sem precisar do navegador original", async () => {
-    cliente.verifyOtp.mockResolvedValue({ data: {}, error: null })
+  it("link do e-mail (token_hash) pedido neste navegador entra na área sem perguntar, uma única vez, mesmo em outra aba", async () => {
+    const maria = { access_token: "a-maria", refresh_token: "r-maria", user: { id: "u-maria", email: "maria@example.test" } }
+    auth.resetPasswordForEmail.mockResolvedValue({ error: null })
+    await requestPasswordReset(" Maria@Example.test ", "/barbearia-do-tico")
+    conferencia.verifyOtp.mockResolvedValue({ data: { session: maria, user: maria.user }, error: null })
+    cliente.setSession.mockResolvedValue({ data: {}, error: null })
     const input = { code: null, tokenHash: "pkce_h1", isRecovery: true }
     const [a, b] = await Promise.all([finishAuthCallback("cliente", input), finishAuthCallback("cliente", input)])
     expect(a).toEqual({ recovery: true })
     expect(b).toBe(a)
-    expect(cliente.verifyOtp).toHaveBeenCalledTimes(1)
-    expect(cliente.verifyOtp).toHaveBeenCalledWith({ token_hash: "pkce_h1", type: "recovery" })
+    expect(conferencia.verifyOtp).toHaveBeenCalledTimes(1)
+    expect(conferencia.verifyOtp).toHaveBeenCalledWith({ token_hash: "pkce_h1", type: "recovery" })
+    expect(cliente.verifyOtp).not.toHaveBeenCalled() // o link nunca é verificado direto na sessão da área
+    expect(cliente.setSession).toHaveBeenCalledWith({ access_token: "a-maria", refresh_token: "r-maria" })
     expect(cliente.exchangeCodeForSession).not.toHaveBeenCalled()
 
     await finishAuthCallback("cliente", { code: null, tokenHash: "pkce_h2", isRecovery: false })
-    expect(cliente.verifyOtp).toHaveBeenLastCalledWith({ token_hash: "pkce_h2", type: "email" }) // confirmação de cadastro
+    expect(conferencia.verifyOtp).toHaveBeenLastCalledWith({ token_hash: "pkce_h2", type: "email" }) // confirmação de cadastro
+  })
+
+  it("cadastro guarda o e-mail pedido: a confirmação dessa conta entra sem perguntar", async () => {
+    const ana = { access_token: "a-ana", refresh_token: "r-ana", user: { id: "u-ana", email: "ana@example.test" } }
+    auth.signUp.mockResolvedValue({ data: { user: { identities: [{}] }, session: null }, error: null })
+    await signUp({ nome: "Ana", email: "ana@example.test", senha: "12345678" }, "/barbearia-do-tico")
+    conferencia.verifyOtp.mockResolvedValue({ data: { session: ana, user: ana.user }, error: null })
+    cliente.setSession.mockResolvedValue({ data: {}, error: null })
+    expect(await finishAuthCallback("cliente", { code: null, tokenHash: "pkce_cadastro" })).toEqual({ recovery: false })
+    expect(cliente.setSession).toHaveBeenCalledWith({ access_token: "a-ana", refresh_token: "r-ana" })
+  })
+
+  it("sem sessão, link de e-mail de conta que este navegador NÃO pediu não entra sozinho: pergunta mostrando a conta do link", async () => {
+    const joao = { access_token: "a-joao", refresh_token: "r-joao", user: { id: "u-joao", email: "joao.silva@example.test" } }
+    conferencia.verifyOtp.mockResolvedValue({ data: { session: joao, user: joao.user }, error: null })
+    cliente.setSession.mockResolvedValue({ data: {}, error: null })
+    conferencia.signOut.mockResolvedValue({ error: null })
+
+    const r = await finishAuthCallback("cliente", { code: null, tokenHash: "pkce_de_outro", isRecovery: false })
+    expect(cliente.verifyOtp).not.toHaveBeenCalled()
+    expect(cliente.setSession).not.toHaveBeenCalled() // nada é gravado na área antes da escolha
+    expect(r).toMatchObject({ recovery: false, troca: { atual: null, link: "joao.silva@example.test" } })
+
+    await r.troca!.cancelar()
+    expect(conferencia.signOut).toHaveBeenCalledWith({ scope: "local" })
+    expect(cliente.setSession).not.toHaveBeenCalled()
+    await r.troca!.confirmar()
+    expect(cliente.setSession).toHaveBeenCalledWith({ access_token: "a-joao", refresh_token: "r-joao" })
   })
 
   it("link do e-mail expirado ou já usado repassa o erro do servidor", async () => {
-    cliente.verifyOtp.mockResolvedValue({ data: {}, error: { code: "otp_expired" } })
+    conferencia.verifyOtp.mockResolvedValue({ data: {}, error: { code: "otp_expired" } })
     await expect(finishAuthCallback("cliente", { code: null, tokenHash: "pkce_h3" })).rejects.toMatchObject({ code: "otp_expired" })
+    expect(cliente.setSession).not.toHaveBeenCalled()
   })
 
   it("retorno sem código nem token_hash (tokens do fluxo implícito no link) é recusado e nunca troca a sessão", async () => {
@@ -205,19 +240,14 @@ describe("duas sessões: painel e cliente", () => {
     expect(cliente.setSession).toHaveBeenCalledWith({ access_token: "a-outra", refresh_token: "r-outra" })
   })
 
-  it("com sessão da MESMA conta, o link de e-mail conclui sem perguntar; sem sessão, segue como sempre", async () => {
+  it("com sessão da MESMA conta, o link de e-mail conclui sem perguntar", async () => {
     const maria = { access_token: "a1", refresh_token: "r1", user: { id: "u-maria", email: "maria@example.test" } }
     cliente.getSession.mockResolvedValue({ data: { session: maria } })
     conferencia.verifyOtp.mockResolvedValue({ data: { session: { ...maria, access_token: "a2", refresh_token: "r2" } }, error: null })
     cliente.setSession.mockResolvedValue({ data: {}, error: null })
     expect(await finishAuthCallback("cliente", { code: null, tokenHash: "pkce_mesma", isRecovery: true })).toEqual({ recovery: true })
     expect(cliente.setSession).toHaveBeenCalledWith({ access_token: "a2", refresh_token: "r2" })
-
-    cliente.getSession.mockResolvedValue({ data: { session: null } })
-    cliente.verifyOtp.mockResolvedValue({ data: {}, error: null })
-    expect(await finishAuthCallback("cliente", { code: null, tokenHash: "pkce_sem_sessao" })).toEqual({ recovery: false })
-    expect(cliente.verifyOtp).toHaveBeenCalledWith({ token_hash: "pkce_sem_sessao", type: "email" })
-    expect(conferencia.verifyOtp).toHaveBeenCalledTimes(1)
+    expect(cliente.verifyOtp).not.toHaveBeenCalled()
   })
 
   it("link expirado conferido com sessão aberta repassa o erro e não mexe na sessão", async () => {

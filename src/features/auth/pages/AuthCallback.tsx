@@ -34,7 +34,7 @@ export function AuthCallback() {
   const [area] = useState(() => callback.area ?? areaOf(saved ?? "/dashboard"))
   const { session, loading } = useAuth(area)
   const [outcome, setOutcome] = useState<Outcome | null>(null)
-  // Link de e-mail de outra conta com sessão já aberta nesta área: só troca se a pessoa escolher a conta do link.
+  // Link de e-mail de outra conta (ou, sem sessão, de conta que este navegador não pediu): só entra se a pessoa escolher a conta do link.
   const [troca, setTroca] = useState<(AccountSwitch & { recovery: boolean }) | null>(null)
   const [escolhendo, setEscolhendo] = useState(false)
   // O destino guardado é um só no navegador: se um fluxo da outra área começou depois, ele não vale para esta.
@@ -86,10 +86,32 @@ export function AuthCallback() {
       setEscolhendo(true)
       troca.confirmar().then(() => setOutcome(troca.recovery ? "recovery" : "signed-in"), () => setOutcome("falha"))
     }
-    // Mantém a sessão atual (a do link é encerrada) e segue para onde iria
+    // Mantém a sessão atual (a do link é encerrada) e segue para onde iria; sem sessão, volta à porta sem entrar
     const manter = () => {
       setEscolhendo(true)
-      troca.cancelar().catch(() => undefined).finally(() => setOutcome("signed-in"))
+      troca.cancelar().catch(() => undefined).finally(() => {
+        if (troca.atual) return setOutcome("signed-in")
+        consumeNext()
+        navigate(failDoor, { replace: true })
+      })
+    }
+    if (!troca.atual) {
+      return (
+        <main className="flex min-h-dvh items-center justify-center bg-background p-4 text-foreground">
+          <Panel className="flex w-full max-w-[480px] flex-col gap-4 p-5 sm:p-6">
+            <div className="flex flex-col gap-1.5">
+              <h1 className="font-display text-2xl font-bold tracking-wide">Entrar com esta conta?</h1>
+              <p className="text-sm text-muted-foreground">
+                Este link é da conta <strong className="text-foreground">{troca.link}</strong>. Só continue se ela for sua.
+              </p>
+            </div>
+            <div className="flex flex-col gap-2">
+              <Button disabled={escolhendo} onClick={usarLink}>Entrar como {troca.link}</Button>
+              <Button variant="outline" disabled={escolhendo} onClick={manter}>Cancelar</Button>
+            </div>
+          </Panel>
+        </main>
+      )
     }
     return (
       <main className="flex min-h-dvh items-center justify-center bg-background p-4 text-foreground">

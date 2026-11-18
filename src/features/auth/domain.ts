@@ -56,6 +56,28 @@ export function rememberNext(path: unknown) {
   }
 }
 
+const EMAIL_KEY = "barberia:auth-email"
+
+/** E-mail que ESTE navegador pediu (cadastro ou nova senha), por 24 h: só o link dessa conta entra sem perguntar (AuthCallback). */
+export function rememberAuthEmail(email: string) {
+  try {
+    localStorage.setItem(EMAIL_KEY, JSON.stringify({ email: email.trim().toLowerCase(), exp: Date.now() + NEXT_TTL_MS }))
+  } catch {
+    // navegador sem armazenamento: o link pergunta antes de entrar
+  }
+}
+
+/** E-mail pedido neste navegador, ou null se não houver ou tiver vencido. */
+export function requestedAuthEmail(): string | null {
+  try {
+    const saved = JSON.parse(localStorage.getItem(EMAIL_KEY) ?? "null") as { email?: unknown; exp?: unknown } | null
+    if (saved && typeof saved.exp === "number" && saved.exp > Date.now() && typeof saved.email === "string") return saved.email
+  } catch {
+    // valor adulterado ou armazenamento indisponível
+  }
+  return null
+}
+
 /**
  * Destino guardado, uma única vez. Sem ele (outro aparelho ou navegador), usa `fallback` — a barbearia onde a conta
  * foi criada — e, por fim, o painel. Tudo passa por `safeNext`.

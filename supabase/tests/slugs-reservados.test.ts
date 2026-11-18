@@ -126,3 +126,28 @@ describe("endereço já usado fica com a barbearia de origem (0040)", () => {
     expect(await fails(ID.dono, "select private.claim_shop_slug()")).toMatch(/permission denied|trigger/)
   })
 })
+
+describe("limite de endereços por barbearia (0053)", () => {
+  const slug = async (id: string) => val(ID.donoB, "select slug from barbershops where id = $1", [id])
+  const registro = async (s: string) => (await db.query<{ barbershop_id: string }>("select barbershop_id from barbershop_slugs where slug = $1", [s])).rows[0]?.barbershop_id ?? null
+  beforeAll(async () => {
+    await db.exec(readFileSync("supabase/migrations/0053_slug_limite.sql", "utf8"))
+  })
+
+  it("a barbearia usa até 5 endereços; o 6º novo é recusado com slug_limit e o endereço atual não muda", async () => {
+    const loja = await val(ID.donoB, "select create_barbershop('Barbearia Limite', 'limite-1')")
+    for (const n of [2, 3, 4, 5]) await rows(ID.donoB, "select set_shop_slug($1, $2)", [loja, `limite-${n}`])
+    expect(await fails(ID.donoB, "select set_shop_slug($1, 'limite-6')", [loja])).toMatch(/slug_limit/)
+    expect(await slug(loja)).toBe("limite-5")
+    expect(await registro("limite-6")).toBeNull()
+  })
+
+  it("voltar a um endereço já usado continua livre; o recusado segue disponível para outra barbearia; endereço de outra continua slug_taken", async () => {
+    const loja = await val(ID.donoB, "select id from barbershops where slug = 'limite-5'")
+    await rows(ID.donoB, "select set_shop_slug($1, 'limite-2')", [loja])
+    expect(await slug(loja)).toBe("limite-2")
+    const outra = await val(ID.gerente, "select create_barbershop('Outra Barbearia', 'limite-6')")
+    expect(await registro("limite-6")).toBe(outra)
+    expect(await fails(ID.donoB, "select set_shop_slug($1, 'barbearia-a')", [loja])).toMatch(/slug_taken/)
+  })
+})

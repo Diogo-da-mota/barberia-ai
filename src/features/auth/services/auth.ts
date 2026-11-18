@@ -1,7 +1,7 @@
 import { authClients, CALLBACK_PATH, currentArea, detachedAuth, supabase } from "@/lib/supabase"
 import type { AuthArea } from "@/lib/shopPaths"
 import type { Session, User } from "@supabase/supabase-js"
-import { rememberNext, safeNext } from "../domain"
+import { rememberAuthEmail, rememberNext, requestedAuthEmail, safeNext } from "../domain"
 
 /**
  * Usa a origem atual (qualquer porta ou domínio cadastrado no Supabase). `area` diz ao /auth/callback qual sessão o fluxo
@@ -44,6 +44,7 @@ export async function signInWithPassword(email: string, password: string) {
 /** `full_name` é só para exibição: papéis e permissões nunca vêm de `user_metadata`. */
 export async function signUp(account: { nome: string; email: string; senha: string; whatsapp?: string }, next = "/dashboard") {
   rememberNext(next)
+  rememberAuthEmail(account.email)
   const { data, error } = await supabase.auth.signUp({
     email: account.email,
     password: account.senha,
@@ -68,6 +69,7 @@ export async function signUp(account: { nome: string; email: string; senha: stri
 /** `next`: para onde voltar depois de salvar a nova senha (cliente → barbearia; equipe → painel), em qualquer navegador. */
 export async function requestPasswordReset(email: string, next = "/dashboard") {
   rememberNext(next)
+  rememberAuthEmail(email)
   const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: callbackUrl("recuperar", next) })
   if (error) {
     throw error
@@ -113,8 +115,11 @@ export function onAuthStateChange(
   return data
 }
 
-/** Link de e-mail de OUTRA conta aberto com sessão nesta área: a sessão só muda se a pessoa confirmar (AuthCallback). */
-export type AccountSwitch = { atual: string; link: string; confirmar: () => Promise<void>; cancelar: () => Promise<void> }
+/**
+ * Link de e-mail de OUTRA conta (com sessão nesta área) ou de conta que este navegador não pediu (sem sessão, `atual: null`):
+ * a sessão só muda se a pessoa confirmar a conta do link (AuthCallback).
+ */
+export type AccountSwitch = { atual: string | null; link: string; confirmar: () => Promise<void>; cancelar: () => Promise<void> }
 
 const finishing = new Map<string, Promise<{ recovery: boolean; troca?: AccountSwitch }>>()
 
@@ -130,8 +135,9 @@ type CallbackInput = {
  * ou aparelho; o servidor aceita cada link uma única vez e só até expirar. `code`: Google (PKCE, o verificador está só no
  * cliente desta área, no navegador que iniciou) e e-mails antigos. Tokens do fluxo implícito (`#access_token=`) nunca são
  * aceitos: o app só inicia PKCE, e um link com os tokens de outra conta trocaria a sessão desta área sem ninguém perceber.
- * Pelo mesmo motivo, `tokenHash` com sessão já aberta na área é conferido num cliente à parte: da mesma conta, segue; de outra
- * conta, devolve `troca` e a sessão só muda se a pessoa confirmar a conta do link.
+ * Pelo mesmo motivo, `tokenHash` é sempre conferido num cliente à parte e só entra direto quando é da conta já aberta na área
+ * ou, sem sessão, do e-mail que este navegador pediu (cadastro ou nova senha). Nos outros casos devolve `troca` e a sessão só
+ * muda se a pessoa confirmar a conta do link: um link da conta de outra pessoa não faz login escondido (login CSRF).
  */
 export function finishAuthCallback(area: AuthArea, input: CallbackInput) {
   const key = `${area}:${input.tokenHash ?? input.code ?? ""}`
@@ -142,11 +148,6 @@ export function finishAuthCallback(area: AuthArea, input: CallbackInput) {
       if (input.tokenHash) {
         const type = input.isRecovery ? "recovery" : "email"
         const atual = (await auth.getSession()).data.session
-        if (!atual) {
-          const { error } = await auth.verifyOtp({ token_hash: input.tokenHash, type })
-          if (error) throw error
-          return { recovery: type === "recovery" }
-        }
         const conferencia = detachedAuth()
         const { data, error } = await conferencia.verifyOtp({ token_hash: input.tokenHash, type })
         if (error) throw error
@@ -156,12 +157,14 @@ export function finishAuthCallback(area: AuthArea, input: CallbackInput) {
           const { error: falha } = await auth.setSession({ access_token: nova.access_token, refresh_token: nova.refresh_token })
           if (falha) throw falha
         }
-        if (nova.user.id === atual.user.id) {
+        const pedida = requestedAuthEmail()
+        const mesmaConta = atual ? nova.user.id === atual.user.id : Boolean(pedida && nova.user.email?.toLowerCase() === pedida)
+        if (mesmaConta) {
           await confirmar()
           return { recovery: type === "recovery" }
         }
         const cancelar = async () => { await conferencia.signOut({ scope: "local" }) }
-        const troca = { atual: atual.user.email ?? "sua conta atual", link: nova.user.email ?? "outra conta", confirmar, cancelar }
+        const troca = { atual: atual ? atual.user.email ?? "sua conta atual" : null, link: nova.user.email ?? "outra conta", confirmar, cancelar }
         return { recovery: type === "recovery", troca }
       }
       if (input.code) {

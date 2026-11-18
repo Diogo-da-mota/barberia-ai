@@ -504,6 +504,23 @@ describe("retorno em /auth/callback", () => {
     expect(troca.cancelar).not.toHaveBeenCalled()
   })
 
+  it("sem sessão, link de e-mail de conta que este navegador não pediu pergunta antes de entrar; cancelar volta à porta", async () => {
+    const troca = { atual: null, link: "joao.silva@example.test", confirmar: vi.fn(), cancelar: vi.fn().mockResolvedValue(undefined) }
+    mocks.finishAuthCallback.mockResolvedValue({ recovery: false, troca })
+    at("?area=cliente&volta=%2Fbarbearia-teste#token_hash=h&type=email")
+    const router = renderAt("/auth/callback")
+
+    expect(await screen.findByRole("heading", { name: "Entrar com esta conta?" })).toBeInTheDocument()
+    expect(screen.getByText(/Este link é da conta/)).toHaveTextContent("joao.silva@example.test")
+    expect(router.state.location.pathname).toBe("/auth/callback")
+    fireEvent.click(screen.getByRole("button", { name: "Cancelar" }))
+
+    await waitFor(() => expect(router.state.location.pathname).toBe("/barbearia-teste/entrar"))
+    expect(router.state.location.search).toBe("")
+    expect(troca.cancelar).toHaveBeenCalledTimes(1)
+    expect(troca.confirmar).not.toHaveBeenCalled()
+  })
+
   it("acesso direto sem parâmetros só abre o popup", async () => {
     at("")
     renderAt("/auth/callback")
