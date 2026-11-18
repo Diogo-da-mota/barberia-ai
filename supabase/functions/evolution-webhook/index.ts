@@ -6,7 +6,7 @@
  */
 
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
-import { createClient, type SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { createClient, type SupabaseClient } from 'npm:@supabase/supabase-js@2.119.0';
 import { handleCors, withCors } from '../_shared/cors.ts';
 import { loadEvolutionConfig, ConfigError } from '../_shared/evolution-config.ts';
 import { EVOLUTION_SECRET_HEADER, evoSendText } from '../_shared/evolution-client.ts';

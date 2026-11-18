@@ -29,6 +29,15 @@ const makeClient = (area: AuthArea) =>
 
 export const authClients = { painel: makeClient("painel"), cliente: makeClient("cliente") } satisfies Record<AuthArea, unknown>
 
+/**
+ * Cliente sem sessão guardada, só para conferir um link de e-mail aberto quando a área já tem sessão: a sessão da área só muda
+ * depois que a pessoa confirma a conta do link (AuthCallback). Nada dele fica no navegador.
+ */
+export const detachedAuth = () =>
+  createClient(supabaseUrl, supabaseAnonKey, {
+    auth: { storageKey: "barberia-auth-conferencia", persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+  }).auth
+
 export const CALLBACK_PATH = "/auth/callback"
 
 /** Área aberta nesta aba, pelo endereço. Em /auth/callback, a área que iniciou o fluxo vem no próprio link (`?area=`). */

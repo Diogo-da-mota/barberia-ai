@@ -7,7 +7,7 @@
  * Erros do provedor → 502 { error: key_rejected | rate_limited | provider_error }.
  */
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { createClient } from 'npm:@supabase/supabase-js@2.119.0';
 import Anthropic from 'npm:@anthropic-ai/sdk@1.8.0';
 import { corsHeaders, handleCors } from '../_shared/cors.ts';
 import { AuthError, requireBarbershopManagement } from '../_shared/auth.ts';

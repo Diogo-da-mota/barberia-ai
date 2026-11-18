@@ -1,4 +1,4 @@
-import { authClients, CALLBACK_PATH, currentArea, supabase } from "@/lib/supabase"
+import { authClients, CALLBACK_PATH, currentArea, detachedAuth, supabase } from "@/lib/supabase"
 import type { AuthArea } from "@/lib/shopPaths"
 import type { Session, User } from "@supabase/supabase-js"
 import { rememberNext, safeNext } from "../domain"
@@ -113,32 +113,56 @@ export function onAuthStateChange(
   return data
 }
 
-const finishing = new Map<string, Promise<{ recovery: boolean }>>()
+/** Link de e-mail de OUTRA conta aberto com sessão nesta área: a sessão só muda se a pessoa confirmar (AuthCallback). */
+export type AccountSwitch = { atual: string; link: string; confirmar: () => Promise<void>; cancelar: () => Promise<void> }
+
+const finishing = new Map<string, Promise<{ recovery: boolean; troca?: AccountSwitch }>>()
 
 type CallbackInput = {
   code: string | null
   tokenHash?: string | null
   isRecovery?: boolean
-  tokens: { access_token: string; refresh_token: string } | null
 }
 
 /**
  * Conclui o retorno do Google ou do e-mail SÓ no cliente da área que iniciou o fluxo, uma vez por link (o StrictMode e um
  * segundo render não concluem duas vezes). `tokenHash`: link do e-mail (cadastro e nova senha), vale em qualquer navegador
  * ou aparelho; o servidor aceita cada link uma única vez e só até expirar. `code`: Google (PKCE, o verificador está só no
- * cliente desta área, no navegador que iniciou) e e-mails antigos. `tokens`: links antigos do fluxo implícito.
+ * cliente desta área, no navegador que iniciou) e e-mails antigos. Tokens do fluxo implícito (`#access_token=`) nunca são
+ * aceitos: o app só inicia PKCE, e um link com os tokens de outra conta trocaria a sessão desta área sem ninguém perceber.
+ * Pelo mesmo motivo, `tokenHash` com sessão já aberta na área é conferido num cliente à parte: da mesma conta, segue; de outra
+ * conta, devolve `troca` e a sessão só muda se a pessoa confirmar a conta do link.
  */
 export function finishAuthCallback(area: AuthArea, input: CallbackInput) {
-  const key = `${area}:${input.tokenHash ?? input.code ?? input.tokens?.access_token ?? ""}`
+  const key = `${area}:${input.tokenHash ?? input.code ?? ""}`
   let pending = finishing.get(key)
   if (!pending) {
     pending = (async () => {
       const auth = authClients[area].auth
       if (input.tokenHash) {
         const type = input.isRecovery ? "recovery" : "email"
-        const { error } = await auth.verifyOtp({ token_hash: input.tokenHash, type })
+        const atual = (await auth.getSession()).data.session
+        if (!atual) {
+          const { error } = await auth.verifyOtp({ token_hash: input.tokenHash, type })
+          if (error) throw error
+          return { recovery: type === "recovery" }
+        }
+        const conferencia = detachedAuth()
+        const { data, error } = await conferencia.verifyOtp({ token_hash: input.tokenHash, type })
         if (error) throw error
-        return { recovery: type === "recovery" }
+        const nova = data.session
+        if (!nova) throw new Error("Retorno sem sessão")
+        const confirmar = async () => {
+          const { error: falha } = await auth.setSession({ access_token: nova.access_token, refresh_token: nova.refresh_token })
+          if (falha) throw falha
+        }
+        if (nova.user.id === atual.user.id) {
+          await confirmar()
+          return { recovery: type === "recovery" }
+        }
+        const cancelar = async () => { await conferencia.signOut({ scope: "local" }) }
+        const troca = { atual: atual.user.email ?? "sua conta atual", link: nova.user.email ?? "outra conta", confirmar, cancelar }
+        return { recovery: type === "recovery", troca }
       }
       if (input.code) {
         const { data, error } = await auth.exchangeCodeForSession(input.code)
@@ -146,10 +170,7 @@ export function finishAuthCallback(area: AuthArea, input: CallbackInput) {
         // a SDK devolve `redirectType` ("recovery" no link de nova senha), ainda fora do tipo publicado
         return { recovery: (data as { redirectType?: string | null }).redirectType === "recovery" }
       }
-      if (!input.tokens) throw new Error("Retorno sem código")
-      const { error } = await auth.setSession(input.tokens)
-      if (error) throw error
-      return { recovery: false }
+      throw new Error("Retorno sem código")
     })()
     finishing.set(key, pending)
   }

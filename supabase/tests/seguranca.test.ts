@@ -43,11 +43,14 @@ describe("Google Agenda: PKCE e vínculo ao navegador", () => {
     expect(pkceCookie("", 0, "/p")).toBe("gcal_pkce=; Path=/p; Max-Age=0; HttpOnly; Secure; SameSite=Lax")
   })
 
-  it("a função envia o desafio, exige o cookie e manda o verificador na troca do código", () => {
-    const src = read("supabase/functions/google-calendar-oauth/index.ts")
+  it("a função envia o desafio, só troca o código no POST da conta dona do state (0047) e manda o verificador na troca", () => {
+    const src = read("supabase/functions/_shared/calendar-oauth.ts")
+    expect(read("supabase/functions/google-calendar-oauth/index.ts")).toContain("handleCalendarOAuth(req,")
     expect(src).toContain('code_challenge_method: "S256"')
-    expect(src).toContain("if (!verifier) return back(\"erro\")")
+    expect(src).toContain('const dono = await deps.rpc("calendar_state_owner", { p_state: state })')
+    expect(src).toContain('if (dono.error || dono.data !== user) return json({ error: "forbidden" }, 403)')
     expect(src).toContain("code_verifier: verifier")
+    expect(src).not.toContain("Set-Cookie") // o vínculo não depende mais de cookie no navegador que abriu o link
     expect(src).toContain('if (url.searchParams.has("error")) return back("erro")')
   })
 })

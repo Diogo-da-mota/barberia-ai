@@ -426,7 +426,7 @@ describe("retorno em /auth/callback", () => {
   it("com sessão, vai ao destino guardado", async () => {
     localStorage.setItem("barberia:auth-next", JSON.stringify({ path: "/dashboard/contas", exp: Date.now() + 60_000 }))
     mocks.getSession.mockResolvedValue(SESSION)
-    at("#access_token=a&refresh_token=r")
+    at("#token_hash=h")
     const router = renderAt("/auth/callback")
 
     await waitFor(() => expect(router.state.location.pathname).toBe("/dashboard/contas"))
@@ -434,7 +434,7 @@ describe("retorno em /auth/callback", () => {
 
   it("sem destino guardado, vai ao painel", async () => {
     mocks.getSession.mockResolvedValue(SESSION)
-    at("#access_token=a&refresh_token=r")
+    at("#token_hash=h")
     const router = renderAt("/auth/callback")
 
     await waitFor(() => expect(router.state.location.pathname).toBe("/dashboard"))
@@ -442,7 +442,7 @@ describe("retorno em /auth/callback", () => {
 
   it("sem destino guardado, a conta do cliente volta para a barbearia onde foi criada", async () => {
     mocks.getSession.mockResolvedValue({ user: { id: "user-1", user_metadata: { signup_next: "/barbearia-teste" } } })
-    at("?area=cliente#access_token=a&refresh_token=r")
+    at("?area=cliente#token_hash=h")
     const router = renderAt("/auth/callback")
 
     await waitFor(() => expect(router.state.location.pathname).toBe("/barbearia-teste"))
@@ -457,10 +457,51 @@ describe("retorno em /auth/callback", () => {
 
   it("retorno sem sessão não falha em silêncio", async () => {
     mocks.finishAuthCallback.mockRejectedValue(new Error("token inválido"))
-    at("#access_token=invalido&refresh_token=r")
+    at("#token_hash=invalido")
     renderAt("/auth/callback")
 
     expect(await dialog()).toHaveTextContent("Não foi possível concluir a autenticação.")
+  })
+
+  it("link com tokens de outra conta (fluxo implícito) não troca a sessão: volta à porta com a falha, sem concluir nada", async () => {
+    mocks.getSession.mockResolvedValue(SESSION)
+    at("?area=cliente&volta=%2Fbarbearia-teste#access_token=token-de-outra-conta&refresh_token=r")
+    const router = renderAt("/auth/callback")
+
+    await waitFor(() => expect(router.state.location.pathname).toBe("/barbearia-teste/entrar"))
+    expect(mocks.finishAuthCallback).not.toHaveBeenCalled()
+  })
+
+  it("link de e-mail de outra conta com sessão aberta pergunta antes de trocar; continuar mantém a conta atual", async () => {
+    const troca = { atual: "maria@example.test", link: "outra@example.test", confirmar: vi.fn().mockResolvedValue(undefined), cancelar: vi.fn().mockResolvedValue(undefined) }
+    mocks.getSession.mockResolvedValue(SESSION)
+    mocks.finishAuthCallback.mockResolvedValue({ recovery: false, troca })
+    at("?area=cliente&volta=%2Fbarbearia-teste#token_hash=h&type=email")
+    const router = renderAt("/auth/callback")
+
+    expect(await screen.findByRole("heading", { name: "Trocar de conta?" })).toBeInTheDocument()
+    expect(screen.getByText(/Você está conectado como/)).toHaveTextContent("maria@example.test")
+    expect(screen.getByText(/Você está conectado como/)).toHaveTextContent("outra@example.test")
+    expect(router.state.location.pathname).toBe("/auth/callback")
+    fireEvent.click(screen.getByRole("button", { name: "Continuar como maria@example.test" }))
+
+    await waitFor(() => expect(router.state.location.pathname).toBe("/barbearia-teste"))
+    expect(troca.cancelar).toHaveBeenCalledTimes(1)
+    expect(troca.confirmar).not.toHaveBeenCalled()
+  })
+
+  it("escolher a conta do link troca a sessão e segue para o destino", async () => {
+    const OUTRA = { user: { id: "user-2", user_metadata: {} } }
+    const troca = { atual: "maria@example.test", link: "outra@example.test", confirmar: vi.fn(async () => emit("SIGNED_IN", OUTRA)), cancelar: vi.fn() }
+    mocks.getSession.mockResolvedValue(SESSION)
+    mocks.finishAuthCallback.mockResolvedValue({ recovery: false, troca })
+    at("?area=cliente&volta=%2Fbarbearia-teste#token_hash=h&type=email")
+    const router = renderAt("/auth/callback")
+
+    fireEvent.click(await screen.findByRole("button", { name: "Entrar como outra@example.test" }))
+    await waitFor(() => expect(router.state.location.pathname).toBe("/barbearia-teste"))
+    expect(troca.confirmar).toHaveBeenCalledTimes(1)
+    expect(troca.cancelar).not.toHaveBeenCalled()
   })
 
   it("acesso direto sem parâmetros só abre o popup", async () => {
@@ -475,7 +516,7 @@ describe("retorno em /auth/callback", () => {
     rememberNext("/barbearia-do-tico/minhas-reservas")
     mocks.getSession.mockResolvedValue(SESSION)
     mocks.updatePassword.mockResolvedValue(undefined)
-    at("#access_token=a&refresh_token=r&type=recovery")
+    at("#token_hash=h&type=recovery")
     const router = renderAt("/auth/callback")
 
     expect(await screen.findByRole("heading", { name: "Definir nova senha" })).toBeInTheDocument()
@@ -489,7 +530,7 @@ describe("retorno em /auth/callback", () => {
   it("recuperação pede a nova senha e depois abre o painel", async () => {
     mocks.getSession.mockResolvedValue(SESSION)
     mocks.updatePassword.mockResolvedValue(undefined)
-    at("#access_token=a&refresh_token=r&type=recovery")
+    at("#token_hash=h&type=recovery")
     const router = renderAt("/auth/callback")
 
     expect(await screen.findByRole("heading", { name: "Definir nova senha" })).toBeInTheDocument()

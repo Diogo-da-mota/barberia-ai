@@ -83,3 +83,46 @@ describe("slugs reservados (0014)", () => {
     expect(await val(ID.dono, "select private.is_reserved_slug(null)")).toBe(false)
   })
 })
+
+describe("endereço já usado fica com a barbearia de origem (0040)", () => {
+  const dono = async (slug: string) => (await db.query<{ barbershop_id: string }>("select barbershop_id from barbershop_slugs where slug = $1", [slug])).rows[0]?.barbershop_id ?? null
+  const atual = async (loja: string) => (await db.query<{ slug: string }>("select slug from barbershops where id = $1", [loja])).rows[0].slug
+
+  beforeAll(async () => {
+    // Antes da 0040 a Barbearia A já trocou 'barbearia-a' por 'barbearia-a-nova' (teste acima): o antigo vem do registro de criação.
+    expect(await atual(lojaA)).toBe("barbearia-a-nova")
+    await db.exec(readFileSync("supabase/migrations/0040_slug_registro.sql", "utf8"))
+  })
+
+  it("carga inicial: endereços atuais e o endereço de criação ficam com a própria barbearia", async () => {
+    expect([await dono("barbearia-a-nova"), await dono("barbearia-a"), await dono("barbearia-b")]).toEqual([lojaA, lojaA, lojaB])
+  })
+
+  it("outra barbearia não assume endereço antigo (create_barbershop nem set_shop_slug); a página antiga continua vazia", async () => {
+    expect(await fails(ID.donoB, "select set_shop_slug($1, 'barbearia-a')", [lojaB])).toMatch(/slug_taken/)
+    expect(await fails(ID.donoB, "select create_barbershop('Barbearia do Tico', 'barbearia-a')")).toMatch(/slug_taken/)
+    expect((await rows(null, "select get_public_shop('barbearia-a') as s"))[0]?.s ?? null).toBeNull()
+    expect(await atual(lojaB)).toBe("barbearia-b")
+  })
+
+  it("a barbearia de origem volta ao endereço antigo; o que ela deixou também fica com ela", async () => {
+    await rows(ID.dono, "select set_shop_slug($1, 'barbearia-a')", [lojaA])
+    expect(await atual(lojaA)).toBe("barbearia-a")
+    expect(await fails(ID.donoB, "select set_shop_slug($1, 'barbearia-a-nova')", [lojaB])).toMatch(/slug_taken/)
+    expect(await fails(ID.donoB, "select create_barbershop('Outra', 'barbearia-a-nova')")).toMatch(/slug_taken/)
+  })
+
+  it("endereço novo continua livre, a troca registra o anterior e palavra reservada segue recusada", async () => {
+    await rows(ID.donoB, "select set_shop_slug($1, 'barbearia-b-dois')", [lojaB])
+    expect(await dono("barbearia-b-dois")).toBe(lojaB)
+    expect(await fails(ID.dono, "select create_barbershop('Mais uma', 'barbearia-b')")).toMatch(/slug_taken/)
+    const nova = await val(ID.dono, "select create_barbershop('Barbearia Nova', 'barbearia-nova-livre')")
+    expect(await dono("barbearia-nova-livre")).toBe(nova)
+    expect(await fails(ID.donoB, "select set_shop_slug($1, 'login')", [lojaB])).toBeTruthy()
+  })
+
+  it("o registro e a função do gatilho não são acessíveis pela API", async () => {
+    for (const u of [ID.dono, null]) expect(await fails(u, "select * from barbershop_slugs")).toMatch(/permission denied/)
+    expect(await fails(ID.dono, "select private.claim_shop_slug()")).toMatch(/permission denied|trigger/)
+  })
+})

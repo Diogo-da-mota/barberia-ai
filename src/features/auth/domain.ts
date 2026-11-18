@@ -163,15 +163,15 @@ export function parseAuthCallback(hash: string, search: string) {
   const params = new URLSearchParams(search)
   new URLSearchParams(hash.replace(/^#/, "")).forEach((value, key) => params.set(key, value))
 
-  const hasError = params.has("error") || params.has("error_code")
+  // Tokens do fluxo implícito no link são recusados (o app só inicia PKCE): tratados como falha, sem trocar a sessão.
+  const implicit = params.has("access_token") || params.has("refresh_token")
+  const hasError = params.has("error") || params.has("error_code") || implicit
   const error: CallbackError | null = !hasError ? null : params.get("error_code") === "otp_expired" ? "link-expirado" : "falha"
 
-  const access_token = params.get("access_token")
-  const refresh_token = params.get("refresh_token")
   return {
     error,
     isRecovery: params.get("type") === "recovery" || params.get("tipo") === "recuperar",
-    hasAuthParams: hasError || params.has("access_token") || params.has("code") || params.has("token_hash"),
+    hasAuthParams: hasError || params.has("code") || params.has("token_hash"),
     /** Área que iniciou o fluxo (colocada no link por `callbackUrl`); links antigos não têm. */
     area: toAuthArea(params.get("area")),
     tipo: params.get("tipo"),
@@ -180,6 +180,5 @@ export function parseAuthCallback(hash: string, search: string) {
     tokenHash: params.get("token_hash"),
     /** Porta de origem gravada no link (`callbackUrl`); validada pela área no /auth/callback. */
     volta: params.get("volta"),
-    tokens: access_token && refresh_token ? { access_token, refresh_token } : null,
   }
 }

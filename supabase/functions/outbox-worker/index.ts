@@ -9,7 +9,7 @@
 // Entrega "pelo menos uma vez": se o worker cair depois de enviar e antes de registrar, o evento volta à fila após 10 minutos.
 // Mensagens iniciadas pela empresa fora da janela de 24h exigem modelos (templates) aprovados pela Meta: ajuste sendWhatsApp
 // para o modelo aprovado antes de produção.
-import { createClient } from "npm:@supabase/supabase-js@2"
+import { createClient } from "npm:@supabase/supabase-js@2.119.0"
 import { buildGoogleEvent, type CalendarPayload } from "../_shared/calendar.ts"
 import { evoSendText } from "../_shared/evolution-client.ts"
 import { ConfigError, loadEvolutionConfig } from "../_shared/evolution-config.ts"

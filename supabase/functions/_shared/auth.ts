@@ -3,7 +3,7 @@
  * Valida se o caller tem membership na barbearia com papel proprietario ou gerente.
  */
 
-import { createClient, type SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { createClient, type SupabaseClient } from 'npm:@supabase/supabase-js@2.119.0';
 
 export interface AuthContext {
   userId: string;

@@ -6,6 +6,7 @@ import { readFileSync } from "node:fs"
 import { PGlite } from "@electric-sql/pglite"
 import { btree_gist } from "@electric-sql/pglite/contrib/btree_gist"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
+import { limparOrfaos } from "../functions/_shared/media-cleanup"
 
 const db = new PGlite({ extensions: { btree_gist } })
 const U = (n: string) => `00000000-0000-4000-8000-0000000000${n}`
@@ -133,5 +134,94 @@ describe("fotos do serviço e do profissional", () => {
     expect(await val(ID.dono, "select set_professional_avatar($1, $2)", [ana, key(loja, `profissionais/${ana}`)])).toBe(a)
     await expect(val(ID.dono, "select set_professional_avatar($1, $2)", [ana, key(lojaB, `profissionais/${ana}`)])).rejects.toThrow(/invalid_media/)
     await expect(val(ID.donoB, "select set_professional_avatar($1, $2)", [ana, key(loja, `profissionais/${ana}`)])).rejects.toThrow(/forbidden/)
+  })
+})
+
+describe("cota de envio e limpeza dos órfãos no S3 (0041)", () => {
+  // As funções são do servidor (service_role); o superusuário do teste faz o papel da Edge Function.
+  const reservar = (shop: string, k: string) => db.query("select reserve_media_upload($1, $2, $3)", [shop, k, ID.dono])
+  const orfaos = async () => (await db.query<{ key: string }>("select key from list_orphan_media(500)")).rows.map((r) => r.key)
+  const envelhecer = (keys: string[]) => db.query("update media_uploads set criado_em = now() - interval '25 hours' where key = any($1)", [keys])
+  const marcar = async (keys: string[]) => (await db.query<{ n: number }>("select mark_media_removed($1) n", [keys])).rows[0].n
+
+  beforeAll(async () => {
+    await db.exec("do $$ begin create role service_role nologin; exception when duplicate_object then null; end $$;")
+    await db.exec(readFileSync("supabase/migrations/0041_midia_cota.sql", "utf8"))
+  })
+
+  it("só o servidor anota, lista e marca envios; a chave precisa ser da própria barbearia", async () => {
+    for (const u of [ID.dono, null]) {
+      await expect(rows(u, "select reserve_media_upload($1, $2, $3)", [loja, key(loja, "site/galeria"), ID.dono])).rejects.toThrow(/permission denied/)
+      await expect(rows(u, "select * from list_orphan_media(10)")).rejects.toThrow(/permission denied/)
+      await expect(rows(u, "select mark_media_removed($1)", [[key(loja, "site/galeria")]])).rejects.toThrow(/permission denied/)
+      await expect(rows(u, "select * from media_uploads")).rejects.toThrow(/permission denied/)
+    }
+    await expect(reservar(loja, key(lojaB, "site/galeria"))).rejects.toThrow(/invalid_media/)
+    for (const k of [`BARBEARIA/${loja}/../${lojaB}/site/galeria/x.jpg`, `BARBEARIA/${loja}/site//galeria/x.jpg`, `BARBEARIA/${loja}/./x.jpg`]) {
+      await expect(reservar(loja, k)).rejects.toThrow(/invalid_media/)
+    }
+  })
+
+  it("no máximo 30 envios sem registro em 24 h; registrar ou apagar libera a vaga; a outra barbearia não é afetada", async () => {
+    const pendentes = Array.from({ length: 30 }, () => key(lojaB, "site/galeria"))
+    for (const k of pendentes) await reservar(lojaB, k)
+    await expect(reservar(lojaB, key(lojaB, "site/galeria"))).rejects.toThrow(/upload_limit/)
+    await reservar(loja, key(loja, "site/galeria"))
+    await register(ID.donoB, lojaB, "galeria", pendentes[0])
+    expect(await marcar([pendentes[1], pendentes[0]])).toBe(1) // a foto registrada nunca é marcada como removida
+    await reservar(lojaB, key(lojaB, "site/galeria"))
+    await reservar(lojaB, key(lojaB, "site/galeria"))
+    await expect(reservar(lojaB, key(lojaB, "site/galeria"))).rejects.toThrow(/upload_limit/)
+  })
+
+  it("no máximo 200 envios em 24 h por barbearia, registrados ou não; passadas 24 h a cota volta", async () => {
+    await db.query("insert into media_uploads (key, barbershop_id, removido_em) select 'BARBEARIA/' || $1 || '/site/galeria/' || gen_random_uuid() || '.jpg', $1::uuid, now() from generate_series(1, 200)", [loja])
+    await expect(reservar(loja, key(loja, "site/galeria"))).rejects.toThrow(/upload_limit/)
+    await db.query("update media_uploads set criado_em = now() - interval '25 hours' where barbershop_id = $1", [loja])
+    await reservar(loja, key(loja, "site/galeria"))
+  })
+
+  it("órfão = anotado, com mais de 24 h, sem registro e não apagado; imagem em uso (site, serviço, profissional) e imagem antiga nunca entram", async () => {
+    const orfao = key(loja, "site/galeria"), recente = key(loja, "site/galeria"), logo = key(loja, "site/logo")
+    const servico = key(loja, `servicos/${corte}`), fotoServico = key(loja, `servicos/${corte}`), avatar = key(loja, `profissionais/${ana}`)
+    for (const k of [orfao, recente, logo, servico, fotoServico, avatar]) await reservar(loja, k)
+    await register(ID.dono, loja, "logo", logo)
+    await val(ID.dono, "select set_service_image($1, $2)", [corte, servico])
+    await val(ID.dono, "select add_service_photo($1, $2)", [corte, fotoServico])
+    await val(ID.dono, "select set_professional_avatar($1, $2)", [ana, avatar])
+    await envelhecer([orfao, logo, servico, fotoServico, avatar])
+    const lista = await orfaos()
+    expect(lista).toContain(orfao)
+    for (const k of [recente, logo, servico, fotoServico, avatar]) expect(lista).not.toContain(k)
+    const emUso = (await db.query<{ p: string }>("select storage_path p from media_objects union select imagem_path from services where imagem_path is not null union select storage_path from service_photos union select avatar_path from professionals where avatar_path is not null")).rows.map((r) => r.p)
+    expect(lista.filter((k) => emUso.includes(k))).toEqual([])
+    expect(await marcar([orfao, logo])).toBe(1)
+    expect(await orfaos()).not.toContain(orfao)
+  })
+
+  it("limparOrfaos (media-migrate, acao 'limpar-orfaos') apaga só o que o banco listou e marca só o que o S3 confirmou", async () => {
+    const velho = key(loja, "site/galeria"), falha = key(loja, "site/galeria")
+    for (const k of [velho, falha]) await reservar(loja, k)
+    await envelhecer([velho, falha])
+    const rpc = async (fn: string, args: Record<string, unknown> = {}) => {
+      const nomes = Object.keys(args)
+      try {
+        const r = await db.query<Record<string, any>>(`select * from ${fn}(${nomes.map((x, i) => `${x} => $${i + 1}`).join(", ")})`, nomes.map((x) => args[x]))
+        return { data: r.rows, error: null }
+      } catch (err) {
+        return { data: null, error: { message: (err as Error).message } }
+      }
+    }
+    const apagadas: string[] = []
+    const antes = await orfaos()
+    const r = await limparOrfaos(rpc, async (k) => {
+      if (k === falha) throw new Error("s3_indisponivel")
+      apagadas.push(k)
+    })
+    expect(r).toEqual({ encontrados: antes.length, apagados: antes.length - 1, falhas: 1 })
+    expect(apagadas).toContain(velho)
+    expect(apagadas).not.toContain(falha)
+    expect(await orfaos()).toEqual([falha]) // a que falhou volta na próxima limpeza
+    await expect(limparOrfaos(async () => ({ data: null, error: { message: "x" } }), async () => {})).rejects.toThrow(/list_orphan_media/)
   })
 })

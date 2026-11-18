@@ -6,13 +6,16 @@
  *                                       caminho no banco. O arquivo antigo CONTINUA no Supabase;
  *   POST { "acao": "apagar-antigas" } → só se nenhum registro apontar mais para o Supabase e todos os arquivos existirem no S3:
  *                                       apaga as fotos do bucket site-media. Os documentos privados (shop-documents) não mudam.
+ *   POST { "acao": "limpar-orfaos" }  → apaga do S3 os envios da função media com mais de 24 h que nenhum registro usa
+ *                                       (list_orphan_media, migration 0041) e os marca como removidos. Pode rodar todo dia.
  */
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
-import { createClient, type SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { createClient, type SupabaseClient } from 'npm:@supabase/supabase-js@2.119.0';
 import { corsHeaders, handleCors } from '../_shared/cors.ts';
 import { safeEqual } from '../_shared/webhook.ts';
 import { KIND_FOLDER, LEGACY_PANEL_FILES, MAX_IMAGE_BYTES, imageType, newKey } from '../_shared/image.ts';
 import { deleteObject, headObject, putObject } from '../_shared/s3.ts';
+import { limparOrfaos } from '../_shared/media-cleanup.ts';
 
 const LEGACY_BUCKET = 'site-media';
 const S3 = 'BARBEARIA/%';
@@ -152,7 +155,14 @@ serve(async (req) => {
       return json({ copiadas: copiadas.length, erros, detalhes: copiadas }, erros.length ? 207 : 200);
     }
     if (acao === 'apagar-antigas') return await apagarAntigas(db);
-    return json({ error: 'acao: simular | copiar | apagar-antigas' }, 400);
+    if (acao === 'limpar-orfaos') {
+      const rpc = async (fn: string, args?: Record<string, unknown>) => {
+        const { data, error } = await db.rpc(fn, args);
+        return { data, error: error ? { message: error.message } : null };
+      };
+      return json(await limparOrfaos(rpc, deleteObject));
+    }
+    return json({ error: 'acao: simular | copiar | apagar-antigas | limpar-orfaos' }, 400);
   } catch (err) {
     console.error('[media-migrate]', err);
     return json({ error: err instanceof Error ? err.message : String(err) }, 500);

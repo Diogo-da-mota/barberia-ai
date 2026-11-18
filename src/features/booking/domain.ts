@@ -190,6 +190,7 @@ const MESSAGES: Record<string, string> = {
   slot_taken: "Este horário acabou de ser ocupado. Escolha outro.",
   booking_limit: "Você já tem 3 reservas futuras ativas nesta barbearia.",
   booking_rate_limited: "Você fez muitas reservas nas últimas 24 horas. Tente novamente mais tarde ou fale com a barbearia.",
+  manual_booking_limit: "Esta barbearia chegou ao limite de 300 reservas manuais em 24 horas. Tente novamente mais tarde.",
   cancel_window: "O prazo para cancelar já passou. Fale com a barbearia.",
   booking_started: "O horário desta reserva já começou. Fale com a barbearia.",
   invalid_contact: "Confira seu nome e seu WhatsApp.",

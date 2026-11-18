@@ -3,7 +3,7 @@
 //   supabase functions deploy whatsapp-webhook --no-verify-jwt   (a autenticidade vem da assinatura HMAC, não do JWT)
 // A função só valida a assinatura e repassa as respostas ao banco; toda a regra (replay, duplicidade, correlação,
 // janela de cancelamento) está em process_whatsapp_reply, testada em supabase/tests/eventos.test.ts.
-import { createClient } from "npm:@supabase/supabase-js@2"
+import { createClient } from "npm:@supabase/supabase-js@2.119.0"
 import { parseWhatsAppPayload, safeEqual, verifyHmacSha256 } from "../_shared/webhook.ts"
 
 declare const Deno: { env: { get(name: string): string | undefined }; serve(handler: (req: Request) => Response | Promise<Response>): void }
