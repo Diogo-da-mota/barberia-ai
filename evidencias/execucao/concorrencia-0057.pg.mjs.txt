@@ -1,0 +1,272 @@
+// Concorrência da 0057 em PostgreSQL 17 REAL e isolado (127.0.0.1, dados em pasta temporária), com várias conexões e contas
+// fictícias. Não usa rede externa nem o banco remoto. Uso: numa pasta vazia, `npm i embedded-postgres@17.11.0-beta.19 pg@8`,
+// salvar este arquivo como concorrencia.mjs e rodar: node concorrencia.mjs <pasta-de-dados-vazia> [atual|antes-da-correcao]
+// 'antes-da-correcao' recria delete_my_account sem as travas de convite e de perfil: o cenário 1 deixa um card ATIVO órfão.
+
+// PostgreSQL 17 real e isolado (127.0.0.1, dados em pasta temporária), várias conexões ao mesmo tempo, contas fictícias.
+// Uso: node concorrencia.mjs <pasta-dos-dados> [atual|antes-da-correcao]
+import EmbeddedPostgres from "embedded-postgres"
+import pg from "pg"
+import { readdirSync, readFileSync } from "node:fs"
+
+const REPO = "/Users/diogomota/Documents/GitHub/Barberia AI"
+const [DIR, VARIANTE = "atual"] = process.argv.slice(2)
+const PORT = 54329
+const epg = new EmbeddedPostgres({ databaseDir: DIR, user: "postgres", password: "teste-local", port: PORT, persistent: false, onLog: () => {}, onError: () => {} })
+await epg.initialise()
+await epg.start()
+const cfg = { host: "127.0.0.1", port: PORT, user: "postgres", password: "teste-local", database: "postgres" }
+const adm = new pg.Client(cfg)
+await adm.connect()
+const q = async (s, p = []) => (await adm.query(s, p)).rows
+let ok = 0, bad = 0
+const check = (nome, passou, det = "") => { passou ? ok++ : bad++; console.log(`${passou ? "PASS" : "FAIL"}  ${nome}${det ? `  (${det})` : ""}`) }
+
+// ---- esquema auth como o do Supabase Auth (GoTrue): FKs em cascata; auth.uid() igual ao do Supabase ----
+await adm.query(`
+  create extension if not exists btree_gist;
+  create role anon nologin; create role authenticated nologin; create role service_role nologin bypassrls;
+  create schema auth;
+  create table auth.users (id uuid primary key default gen_random_uuid(), email text, email_confirmed_at timestamptz default now(), raw_user_meta_data jsonb not null default '{}', raw_app_meta_data jsonb default '{}');
+  create table auth.sessions (id uuid primary key default gen_random_uuid(), user_id uuid not null references auth.users(id) on delete cascade, created_at timestamptz default now());
+  create table auth.refresh_tokens (id bigserial primary key, token text, user_id varchar(255), session_id uuid references auth.sessions(id) on delete cascade, revoked boolean default false);
+  create table auth.identities (id uuid primary key default gen_random_uuid(), user_id uuid not null references auth.users(id) on delete cascade, provider text);
+  create table auth.mfa_factors (id uuid primary key default gen_random_uuid(), user_id uuid not null references auth.users(id) on delete cascade);
+  create table auth.one_time_tokens (id uuid primary key default gen_random_uuid(), user_id uuid not null references auth.users(id) on delete cascade, token_hash text);
+  create function auth.uid() returns uuid language sql stable as $$ select coalesce(nullif(current_setting('request.jwt.claim.sub', true), ''), (nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'sub'))::uuid $$;
+  grant usage on schema auth to anon, authenticated, service_role; grant execute on function auth.uid() to anon, authenticated, service_role;
+  create schema storage;
+  create table storage.buckets (id text primary key, name text, public boolean, file_size_limit bigint, allowed_mime_types text[]);
+  create table storage.objects (id uuid primary key default gen_random_uuid(), bucket_id text, name text, owner uuid, metadata jsonb);
+  create function storage.foldername(name text) returns text[] language sql immutable as $$ select (string_to_array(name, '/'))[1:array_length(string_to_array(name, '/'), 1) - 1] $$;
+  alter table storage.objects enable row level security;
+  grant usage on schema public to anon, authenticated, service_role;
+  alter default privileges in schema public grant all on tables to anon, authenticated, service_role;
+  alter default privileges in schema public grant all on functions to anon, authenticated, service_role;
+`)
+for (const f of readdirSync(`${REPO}/supabase/migrations`).filter((x) => x.endsWith(".sql")).sort()) await adm.query(readFileSync(`${REPO}/supabase/migrations/${f}`, "utf8"))
+if (VARIANTE === "antes-da-correcao") {
+  // delete_my_account sem as travas de convite e de perfil (como estava antes desta validação)
+  const src = readFileSync(`${REPO}/supabase/migrations/0057_saida_exclusao_equipe.sql`, "utf8")
+  let fn = src.slice(src.indexOf("create or replace function public.delete_my_account()"))
+  fn = fn.slice(0, fn.indexOf("$$;") + 3)
+  fn = fn.replace(/\n  -- Convites do e-mail[\s\S]*?for update;\n/, "\n").replace(/\n  -- Trava o perfil[\s\S]*?for update;\n/, "\n")
+  await adm.query(fn)
+}
+console.log(`PostgreSQL ${(await q("show server_version"))[0].server_version} · variante: ${VARIANTE}`)
+
+// ---- conexões como o PostgREST: transação, papel authenticated e claims locais ----
+const agora = () => Math.floor(Date.now() / 1000)
+async function conectar() { const c = new pg.Client(cfg); await c.connect(); c.pid = (await c.query("select pg_backend_pid() p")).rows[0].p; return c }
+async function como(c, uid, sql, params = [], { amr = [{ method: "password", timestamp: agora() }], aberta = false } = {}) {
+  await c.query("begin")
+  await c.query("select set_config('request.jwt.claims', $1, true), set_config('request.jwt.claim.sub', $2, true)", [JSON.stringify({ sub: uid, role: "authenticated", amr }), uid])
+  await c.query("set local role authenticated")
+  try {
+    const r = await c.query(sql, params)
+    if (!aberta) await c.query("commit")
+    return r.rows
+  } catch (e) {
+    await c.query("rollback").catch(() => {})
+    throw e
+  }
+}
+const tentar = (p) => p.then((r) => ({ ok: r }), (e) => ({ erro: e.message, code: e.code }))
+async function esperandoTrava(c, ms = 5000) {
+  for (const fim = Date.now() + ms; Date.now() < fim; await new Promise((r) => setTimeout(r, 25))) {
+    const [r] = await q("select wait_event_type t from pg_stat_activity where pid = $1", [c.pid])
+    if (r?.t === "Lock") return true
+  }
+  return false
+}
+
+// ---- dados fictícios ----
+let seq = 0
+const conta = async (nome) => {
+  const id = (await q("insert into auth.users (email, raw_user_meta_data) values ($1, $2) returning id", [`${nome}.${++seq}@example.test`, { full_name: nome }]))[0].id
+  const s = (await q("insert into auth.sessions (user_id) values ($1) returning id", [id]))[0].id
+  await q("insert into auth.refresh_tokens (token, user_id, session_id) values ('rt-ficticio', $1, $2)", [id, s])
+  await q("insert into auth.identities (user_id, provider) values ($1, 'email')", [id])
+  return { id, email: `${nome}.${seq}@example.test` }
+}
+const c0 = await conectar()
+const um = async (uid, sql, p = []) => Object.values((await como(c0, uid, sql, p))[0])[0]
+const dono = await conta("dono"), dono2 = await conta("dona"), estranho = await conta("estranho"), cliente = await conta("maria")
+const lojaA = await um(dono.id, "select create_barbershop('Barbearia Central', 'barbearia-central')")
+const lojaB = await um(dono2.id, "select create_barbershop('Barbearia Norte', 'barbearia-norte')")
+await q("update subscriptions set plan_id = 'rede'")
+const corteA = (await como(c0, dono.id, "insert into services (barbershop_id, nome, preco_centavos, duracao_min) values ($1, 'Corte', 6000, 40) returning id", [lojaA]))[0].id
+const dia = (await q("select ((now() at time zone 'America/Sao_Paulo')::date + 2)::text d"))[0].d
+const convite = (donoId, loja, email) => um(donoId, "select create_invite($1, $2, 'barbeiro')", [loja, email])
+async function barbeiro(nome) {
+  const p = await conta(nome)
+  await um(p.id, "select accept_invite($1)", [await convite(dono.id, lojaA, p.email)])
+  const card = (await q("select id from professionals where barbershop_id = $1 and profile_id = $2", [lojaA, p.id]))[0].id
+  await como(c0, dono.id, "select save_professional($1, $2, $3, true, $4)", [lojaA, card, `${nome} ${seq}`, [corteA]])
+  await como(c0, dono.id, "select save_working_hours($1, $2)", [card, JSON.stringify([0, 1, 2, 3, 4, 5, 6].map((dow) => ({ dow, inicio_min: 540, fim_min: 1080 })))])
+  return { ...p, card }
+}
+const livres = async (card) => (await q("select slot_inicio from get_availability($1, $2, $3, $4) order by 1", [lojaA, corteA, card, dia])).map((r) => r.slot_inicio)
+const existe = async (id) => (await q("select 1 from auth.users where id = $1", [id])).length === 1
+const [A, B, C] = [await conectar(), await conectar(), await conectar()]
+
+// ===== 1. exclusão × aceitar convite (outra barbearia), aceite começa primeiro =====
+{
+  const p = await barbeiro("Bruno")
+  const token = await convite(dono2.id, lojaB, p.email)
+  await como(A, p.id, "select accept_invite($1)", [token], { aberta: true })
+  const del = tentar(como(B, p.id, "select delete_my_account()"))
+  check("1 exclusão espera o aceite em andamento (trava do perfil)", await esperandoTrava(B))
+  await A.query("commit")
+  const r = await del
+  const card = (await q("select ativo, profile_id, email, desligado_em is not null d from professionals where barbershop_id = $1 and nome like 'Bruno%'", [lojaB]))[0]
+  check("1 depois: conta excluída e o card novo da Norte inativo, sem conta e sem e-mail", r.ok && !(await existe(p.id)) && card && !card.ativo && card.profile_id === null && card.email === null && card.d, JSON.stringify({ r, card }))
+}
+
+// ===== 2. exclusão × aceitar convite, exclusão começa primeiro =====
+{
+  const p = await barbeiro("Caio")
+  const token = await convite(dono2.id, lojaB, p.email)
+  await como(B, p.id, "select delete_my_account()", [], { aberta: true })
+  const acc = tentar(como(A, p.id, "select accept_invite($1)", [token]))
+  check("2 aceite espera a exclusão em andamento", await esperandoTrava(A))
+  await B.query("commit")
+  const r = await acc
+  const cards = await q("select 1 from professionals where barbershop_id = $1 and nome like 'Caio%'", [lojaB])
+  check("2 depois: aceite recusado e nenhum card criado na Norte", Boolean(r.erro) && cards.length === 0, r.erro ?? "aceitou")
+}
+
+// ===== 3. exclusão × aceite com a exclusão parada no meio (convite travado pelo aceite) =====
+{
+  const p = await barbeiro("Davi")
+  const token = await convite(dono2.id, lojaB, p.email)
+  await C.query("begin"); await C.query("select 1 from professionals where profile_id = $1 for update", [p.id]) // segura a exclusão depois das primeiras travas
+  const del = tentar(como(B, p.id, "select delete_my_account()"))
+  await esperandoTrava(B)
+  const acc = tentar(como(A, p.id, "select accept_invite($1)", [token]))
+  await new Promise((r) => setTimeout(r, 300))
+  await C.query("commit")
+  const [rd, ra] = await Promise.all([del, acc])
+  const impasse = [rd, ra].some((x) => x.code === "40P01")
+  const ativos = await q("select 1 from professionals where barbershop_id = $1 and nome like 'Davi%' and ativo", [lojaB])
+  check("3 sem impasse (deadlock) entre exclusão e aceite", !impasse, JSON.stringify({ exclusao: rd.erro ?? "ok", aceite: ra.erro ?? "ok" }))
+  check("3 nenhum card ativo sem conta sobra na Norte", ativos.length === 0 || (await existe(p.id)))
+}
+
+// ===== 4. exclusão × reserva como cliente =====
+{
+  const p = await barbeiro("Enzo"), alvo = await barbeiro("Fabio")
+  const v = await livres(alvo.card)
+  await como(A, p.id, "select create_booking($1, $2, $3, $4, 'Enzo', '64992750733', true, false, null)", [lojaA, corteA, alvo.card, v[0]], { aberta: true })
+  const del = tentar(como(B, p.id, "select delete_my_account()"))
+  check("4a exclusão espera a reserva em andamento", await esperandoTrava(B))
+  await A.query("commit")
+  const r = await del
+  check("4a reserva futura gravada → exclusão recusada e conta intacta", r.code === "P0001" && /has_upcoming_bookings/.test(r.erro) && (await existe(p.id)), r.erro)
+  const p2 = await barbeiro("Gael")
+  await como(B, p2.id, "select delete_my_account()", [], { aberta: true })
+  const res = tentar(como(A, p2.id, "select create_booking($1, $2, $3, $4, 'Gael', '64992750733', true, false, null)", [lojaA, corteA, alvo.card, v[4]]))
+  check("4b reserva espera a exclusão em andamento", await esperandoTrava(A))
+  await B.query("commit")
+  const rr = await res
+  const sobra = await q("select 1 from bookings where cliente_nome = 'Gael'")
+  check("4b depois: reserva recusada, nenhuma reserva órfã", Boolean(rr.erro) && sobra.length === 0, rr.erro ?? "reservou")
+}
+
+// ===== 5. duas exclusões ao mesmo tempo (duas abas) e saídas simultâneas =====
+{
+  const p = await barbeiro("Hugo")
+  const cs = await Promise.all(Array.from({ length: 6 }, conectar))
+  const rs = await Promise.all(cs.map((c) => tentar(como(c, p.id, "select delete_my_account()"))))
+  const reg = await q("select count(*)::int n from account_deletion_requests where origem = 'automatica' and status = 'concluido'")
+  check("5a 6 exclusões simultâneas: nenhuma falha, conta apagada uma vez", rs.every((x) => x.ok) && !(await existe(p.id)), JSON.stringify(rs.filter((x) => x.erro)))
+  const p2 = await barbeiro("Igor")
+  const ls = await Promise.all(cs.map((c) => tentar(como(c, p2.id, "select leave_barbershop($1) r", [lojaA]))))
+  const saiu = ls.filter((x) => x.ok?.[0]?.r?.status === "saiu").length
+  const logs = (await q("select count(*)::int n from audit_logs where acao = 'member.left' and profile_id = $1", [p2.id]))[0].n
+  check("5b 6 saídas simultâneas: uma saída, um registro", saiu === 1 && logs === 1 && ls.every((x) => x.ok), `saiu=${saiu} logs=${logs}`)
+  const p3 = await barbeiro("Joel")
+  const [rl, rd] = await Promise.all([tentar(como(cs[0], p3.id, "select leave_barbershop($1)", [lojaA])), tentar(como(cs[1], p3.id, "select delete_my_account()"))])
+  const card = (await q("select ativo, profile_id, email, telefone, avatar_path from professionals where id = $1", [p3.card]))[0]
+  check("5c saída × exclusão ao mesmo tempo: estado final coerente", rl.ok && rd.ok && !(await existe(p3.id)) && !card.ativo && card.profile_id === null && card.email === null, JSON.stringify({ rl: rl.erro, rd: rd.erro, card }))
+  for (const c of cs) await c.end()
+  void reg
+}
+
+// ===== 6. reserva manual da gestão × exclusão do barbeiro (o card fica inativo) =====
+{
+  const p = await barbeiro("Kaio")
+  const v = await livres(p.card)
+  await como(B, p.id, "select delete_my_account()", [], { aberta: true })
+  const man = tentar(como(A, dono.id, "select create_manual_booking($1, $2, $3, $4, 'Maria', '64992750733', true, 'man-1', null)", [lojaA, corteA, p.card, v[0]]))
+  const esperou = await esperandoTrava(A)
+  await B.query("commit")
+  const r = await man
+  const ativo = (await q("select ativo from professionals where id = $1", [p.card]))[0].ativo
+  console.log(`INFO  6 reserva manual iniciada durante a exclusão: esperou=${esperou}, resultado=${r.erro ?? "gravada"}, card ativo=${ativo}`)
+}
+
+// ===== 7. token antigo da conta excluída × conta sem vínculo nenhum =====
+{
+  const p = await barbeiro("Lucas")
+  await como(c0, p.id, "select delete_my_account()")
+  const tabelas = (await q("select table_name t from information_schema.role_table_grants where grantee = 'authenticated' and table_schema = 'public' and privilege_type = 'SELECT' group by 1 order by 1")).map((r) => r.t)
+  const dif = []
+  for (const t of tabelas) {
+    const a = (await como(c0, p.id, `select count(*)::int n from public.${t}`).catch(() => [{ n: "erro" }]))[0].n
+    const b = (await como(c0, estranho.id, `select count(*)::int n from public.${t}`).catch(() => [{ n: "erro" }]))[0].n
+    if (a === "erro" || a > b) dif.push(`${t}: ${a}>${b}`) // a conta sem vínculo enxerga o próprio perfil; o token antigo nunca pode ver MAIS
+  }
+  check(`7a token antigo não vê nada além do que uma conta sem vínculo vê (${tabelas.length} tabelas)`, dif.length === 0, dif.join(", "))
+  const tentativas = {
+    criar_barbearia: await tentar(como(c0, p.id, "select create_barbershop('Nova', 'nova-loja-teste')")),
+    reservar: await tentar(como(c0, p.id, "select create_booking($1, $2, $3, $4, 'X', '64992750733', true, false, null)", [lojaA, corteA, (await barbeiro("Mauro")).card, (await livres((await q("select id from professionals where nome like 'Mauro%'"))[0].id))[0]])),
+    convite: await tentar(como(c0, p.id, "select accept_invite($1)", [await convite(dono.id, lojaA, p.email)])),
+    pedido: await tentar(como(c0, p.id, "select request_account_deletion()")),
+    consentimento: await tentar(como(c0, p.id, "select set_marketing_consent($1, true)", [lojaA])),
+  }
+  check("7b token antigo não cria barbearia, reserva, vínculo, pedido nem consentimento", Object.values(tentativas).every((x) => x.erro), JSON.stringify(Object.fromEntries(Object.entries(tentativas).map(([k, v]) => [k, v.erro ?? "PASSOU"]))))
+  const sess = (await q("select (select count(*) from auth.sessions where user_id = $1)::int s, (select count(*) from auth.refresh_tokens where user_id = $1::text)::int r, (select count(*) from auth.identities where user_id = $1)::int i", [p.id]))[0]
+  check("7c sessões, refresh tokens e identidades apagados junto", sess.s === 0 && sess.r === 0 && sess.i === 0, JSON.stringify(sess))
+}
+
+// ===== 8. atomicidade: sem permissão para apagar em auth.users, nada muda =====
+{
+  const p = await barbeiro("Nina")
+  await q(`create role definidor_sem_delete nologin bypassrls; -- como o postgres do Supabase (dono das funções, ignora RLS)
+    grant usage on schema public, private, auth to definidor_sem_delete;
+    grant all on all tables in schema public to definidor_sem_delete;
+    grant all on all sequences in schema public to definidor_sem_delete;
+    grant execute on all functions in schema private to definidor_sem_delete;
+    grant select, update on auth.users to definidor_sem_delete;
+    alter function public.delete_my_account() owner to definidor_sem_delete`)
+  const r = await tentar(como(c0, p.id, "select delete_my_account()"))
+  await q("alter function public.delete_my_account() owner to postgres")
+  const card = (await q("select ativo, profile_id, email from professionals where id = $1", [p.card]))[0]
+  const pedidos = (await q("select count(*)::int n from account_deletion_requests where profile_id = $1", [p.id]))[0].n
+  check("8 falha ao apagar o login desfaz tudo (card, vínculo e registro intactos)", /permission denied for table users/.test(r.erro ?? "") && (await existe(p.id)) && card.ativo && card.profile_id === p.id && pedidos === 0, `${r.erro} ${JSON.stringify(card)}`)
+}
+
+// ===== 9. reautenticação no Postgres real (claims locais como o PostgREST) =====
+{
+  const p = await barbeiro("Otto")
+  const casos = [
+    ["sem amr", []],
+    ["senha há 2 h", [{ method: "password", timestamp: agora() - 7200 }]],
+    ["senha antiga + TOTP agora", [{ method: "password", timestamp: agora() - 7200 }, { method: "totp", timestamp: agora() }]],
+    ["só renovação agora", [{ method: "token_refresh", timestamp: agora() }]],
+    ["troca de e-mail agora", [{ method: "email_change", timestamp: agora() }]],
+    ["horário no futuro", [{ method: "password", timestamp: agora() + 86400 }]],
+    ["timestamp em texto", [{ method: "password", timestamp: "x" }]],
+  ]
+  const res = []
+  for (const [nome, amr] of casos) res.push([nome, (await tentar(como(c0, p.id, "select delete_my_account()", [], { amr }))).erro ?? "EXCLUIU"])
+  check("9 nenhum desses amr exclui a conta", res.every(([, e]) => /reauth_required/.test(e)) && (await existe(p.id)), res.filter(([, e]) => !/reauth_required/.test(e)).map((x) => x.join("=")).join(", "))
+  const r = await tentar(como(c0, p.id, "select delete_my_account()", [], { amr: [{ method: "oauth", timestamp: agora() - 60 }] }))
+  check("9 login com Google há 1 min exclui", r.ok && !(await existe(p.id)), r.erro)
+}
+
+console.log(`\n${ok} PASS, ${bad} FAIL`)
+for (const c of [c0, A, B, C, adm]) await c.end().catch(() => {})
+await epg.stop()
+process.exit(bad ? 1 : 0)

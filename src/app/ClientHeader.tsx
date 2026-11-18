@@ -1,10 +1,9 @@
-import { useState } from "react"
+import { useCallback, useState } from "react"
 import { Link, useNavigate } from "react-router-dom"
 import { CalendarCheck, LogOut, Menu, Scissors, Trash2, UserRound } from "lucide-react"
-import { deleteAccountErrorMessage } from "@/features/auth/domain"
+import { DeleteAccountDialog } from "@/features/auth/components/DeleteAccountDialog"
+import { useDeleteAccountReturn } from "@/features/auth/hooks/useDeleteAccountReturn"
 import { useAuth } from "@/features/auth/hooks/useAuth"
-import { deleteMyAccount } from "@/features/auth/services/auth"
-import { ConfirmDelete } from "@/features/catalog/components/ConfirmDelete"
 import { publicMediaUrl } from "@/features/site/api"
 import { shopBookingsPath, shopPath, shopSectionPath, type ShopSection } from "@/lib/shopPaths"
 import { Button } from "@/ui/button"
@@ -34,25 +33,13 @@ export function ClientHeader({ slug, shop, onLogin }: { slug: string; shop?: { n
     try { await logout() } catch { toast.error("Não foi possível sair. Tente novamente.") }
   }
 
-  // Exclusão da própria conta (LGPD): confirma, apaga no servidor, encerra a sessão e volta para a página da barbearia
+  // Exclusão da própria conta (LGPD): o pop-up confirma (login recente), apaga no servidor e encerra as sessões; aqui volta
+  // para a página da barbearia. Voltando da confirmação pelo Google com a mesma conta, o pop-up reabre.
   const [excluir, setExcluir] = useState(false)
-  const [excluindo, setExcluindo] = useState(false)
-  const [erroExclusao, setErroExclusao] = useState<string | null>(null)
-  const fecharExclusao = () => { setExcluir(false); setErroExclusao(null) }
-  const confirmarExclusao = async () => {
-    setExcluindo(true)
-    setErroExclusao(null)
-    try {
-      await deleteMyAccount()
-    } catch (error) {
-      setErroExclusao(deleteAccountErrorMessage(error))
-      setExcluindo(false)
-      return
-    }
+  useDeleteAccountReturn(session?.user.id, useCallback(() => setExcluir(true), []))
+  const contaExcluida = () => {
     setExcluir(false)
-    setExcluindo(false)
     navigate(shopPath(slug), { replace: true })
-    try { await logout() } catch { /* a conta já não existe: a sessão local é descartada mesmo assim */ }
     toast.success("Sua conta foi excluída.")
   }
 
@@ -108,17 +95,7 @@ export function ClientHeader({ slug, shop, onLogin }: { slug: string; shop?: { n
               </PopoverContent>
             </Popover>
           )}
-          <ConfirmDelete
-            open={excluir}
-            title="Excluir sua conta?"
-            description="Seu login e seus dados de acesso serão apagados. As reservas antigas ficam na barbearia sem seu nome, WhatsApp e e-mail. Não dá para desfazer."
-            confirmLabel="Excluir conta"
-            cancelLabel="Manter minha conta"
-            pending={excluindo}
-            error={erroExclusao}
-            onConfirm={() => void confirmarExclusao()}
-            onClose={fecharExclusao}
-          />
+          <DeleteAccountDialog open={excluir} onClose={() => setExcluir(false)} onDeleted={contaExcluida} />
         </nav>
       </div>
     </header>

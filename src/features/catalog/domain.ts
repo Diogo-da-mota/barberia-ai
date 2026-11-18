@@ -94,6 +94,7 @@ export function catalogErrorMessage(error: unknown, duplicate: string): string {
   if (message === "invalid_phone") return "Telefone inválido. Use +55 00 00000-0000 ou 00 0000-0000."
   if (message === "invalid_email") return "E-mail inválido."
   if (message === "invalid_document") return "CPF ou CNPJ inválido."
+  if (message === "professional_left") return "Este profissional saiu da barbearia. Para ele voltar, envie um novo convite pela Equipe."
   if (code === "23505") return duplicate
   if (code === "42501") return "Você não tem permissão para esta alteração."
   return "Não foi possível salvar. Tente novamente."

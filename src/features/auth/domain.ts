@@ -172,22 +172,23 @@ export function authErrorMessage(error: unknown): string {
 const DELETE_ACCOUNT_MESSAGES: Record<string, string> = {
   has_upcoming_bookings: "Cancele suas reservas futuras antes de excluir a conta.",
   owner_cannot_delete: "Sua conta é dona de uma barbearia. Para excluí-la, fale com o suporte.",
+  reauth_required: "Por segurança, confirme que é você antes de excluir a conta.",
 }
 
-/** Motivo da recusa ao excluir a conta (migration 0056), sem detalhes internos do servidor. */
+/** Motivo da recusa ao excluir a conta (migrations 0056 e 0057), sem detalhes internos do servidor. */
 export function deleteAccountErrorMessage(error: unknown): string {
   const message = String((error as { message?: unknown } | null)?.message ?? "")
   return DELETE_ACCOUNT_MESSAGES[message] ?? "Não foi possível excluir a conta. Tente novamente."
 }
 
-export type CallbackError = "link-expirado" | "falha" | "confirmado" | "outro-navegador"
+export type CallbackError = "link-expirado" | "falha" | "confirmado" | "link-invalido"
 
 export const CALLBACK_NOTICES: Record<CallbackError, string> = {
-  "link-expirado": "Este link expirou ou já foi usado. Entre com e-mail e senha ou peça um novo em “Esqueci minha senha”.",
+  "link-expirado": "Este link expirou, é inválido ou já foi usado. Entre com e-mail e senha ou peça um novo em “Esqueci minha senha”.",
   falha: "Não foi possível concluir a autenticação. Tente novamente.",
   // E-mails enviados antes do modelo com token_hash: o código PKCE só conclui no navegador em que o fluxo começou
   confirmado: "E-mail confirmado. Agora entre com seu e-mail e senha.",
-  "outro-navegador": "Abra o link no mesmo navegador em que pediu a nova senha, ou peça um novo link aqui.",
+  "link-invalido": "Este link de nova senha não é mais válido. Peça um novo em “Esqueci minha senha”.",
 }
 
 export const SESSION_REJECTED_NOTICE = "Sua sessão expirou. Entre novamente."

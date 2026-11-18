@@ -13,15 +13,16 @@ const m = vi.hoisted(() => ({
   setBookingStatus: vi.fn(), fetchMyBookings: vi.fn(), fetchShopBookings: vi.fn(), fetchBlocks: vi.fn(), createBlock: vi.fn(), deleteBlock: vi.fn(),
   fetchWorkingHours: vi.fn(), saveWorkingHours: vi.fn(), acceptInvite: vi.fn(), createInvite: vi.fn(), fetchInvites: vi.fn(), updateShopInfo: vi.fn(),
   fetchProfessionals: vi.fn(), fetchCustomerBookings: vi.fn(), fetchCustomerConsents: vi.fn(), fetchShopDetails: vi.fn(), fetchFiscal: vi.fn(),
-  deleteMyAccount: vi.fn(),
+  deleteMyAccount: vi.fn(), signInWithPassword: vi.fn(), fetchLeaveSummary: vi.fn(), leaveBarbershop: vi.fn(), requestAccountDeletion: vi.fn(), fetchMyDeletionRequest: vi.fn(),
 }))
 
 vi.mock("@/features/home/api", () => ({ fetchMyBarbershops: m.fetchMyBarbershops }))
 vi.mock("@/features/auth/services/auth", async (original) => ({
   ...(await original<typeof import("@/features/auth/services/auth")>()),
   getSession: m.getSession, getCurrentUser: m.getCurrentUser, onAuthStateChange: m.onAuthStateChange, signOut: m.signOut,
-  deleteMyAccount: m.deleteMyAccount,
+  deleteMyAccount: m.deleteMyAccount, signInWithPassword: m.signInWithPassword,
 }))
+vi.mock("@/features/auth/services/account", () => ({ fetchLeaveSummary: m.fetchLeaveSummary, leaveBarbershop: m.leaveBarbershop, requestAccountDeletion: m.requestAccountDeletion, fetchMyDeletionRequest: m.fetchMyDeletionRequest }))
 vi.mock("@/features/catalog/api", () => ({ fetchProfessionals: m.fetchProfessionals, fetchServices: async () => ({ status: "ok", data: [] }) }))
 // dados da barbearia (aba Dados de Mais): aqui, banco sem a migration 0012 (só nome, endereço em uma linha e telefone)
 vi.mock("@/features/settings/api", () => ({ fetchShopDetails: m.fetchShopDetails, fetchFiscal: m.fetchFiscal, saveShopProfile: vi.fn(), saveShopFiscal: vi.fn(), lookupCep: vi.fn() }))
@@ -92,6 +93,7 @@ beforeEach(() => {
   m.createBooking.mockResolvedValue("novo")
   m.fetchMyBookings.mockResolvedValue([booking(), booking({ id: "b2", status: "cancelado", inicio: "2020-01-10T12:00:00.000Z", fim: "2020-01-10T12:40:00.000Z" })])
   m.fetchCustomerConsents.mockResolvedValue([])
+  m.fetchMyDeletionRequest.mockResolvedValue({ supported: true, pending: null })
   m.fetchProfessionals.mockResolvedValue({ status: "ok", data: [{ id: "p1", nome: "Ana", ativo: true, service_ids: ["svc1"] }] })
   m.fetchBlocks.mockResolvedValue([])
   m.fetchShopBookings.mockResolvedValue([])
@@ -682,6 +684,46 @@ describe("Mais", () => {
     expect(screen.queryByRole("button", { name: "Gerar link do convite" })).not.toBeInTheDocument()
     expect(screen.queryByRole("link", { name: /Horários de atendimento/ })).not.toBeInTheDocument()
   })
+
+  it("barbeiro sai da barbearia: escolhe qual, vê o que muda e confirma; o servidor recebe só a barbearia", async () => {
+    m.fetchMyBarbershops.mockResolvedValue({ status: "ok", barbershops: [{ ...SHOP, papel: "barbeiro" }, { ...SHOP, id: "loja-2", nome: "Barbearia Norte", slug: "barbearia-norte", papel: "barbeiro" }, { ...SHOP, id: "loja-3", nome: "Minha Loja", slug: "minha-loja", papel: "proprietario" }] })
+    m.fetchLeaveSummary.mockResolvedValue({ papel: "barbeiro", pode_sair: true, reservas_futuras: 2, comissoes_a_receber_centavos: 2400, google_agenda: true })
+    m.leaveBarbershop.mockResolvedValue({ status: "saiu", reservas_futuras: 2 })
+    const router = open()
+    fireEvent.click(await screen.findByRole("button", { name: "Sair da barbearia" }))
+    const dialog = await screen.findByRole("alertdialog", { name: "Sair da barbearia?" })
+    expect(within(dialog).getByRole("combobox", { name: "Barbearia" })).toBeInTheDocument()
+    expect(await within(dialog).findByText("2 reservas futuras")).toBeInTheDocument()
+    expect(within(dialog).getByText(/R\$\s?24,00/)).toBeInTheDocument()
+    expect(within(dialog).getByText(/Google Agenda ligado a esta barbearia será desconectado/)).toBeInTheDocument()
+    fireEvent.click(within(dialog).getByRole("button", { name: "Sair da barbearia" }))
+    await waitFor(() => expect(router.state.location.pathname).toBe("/dashboard"))
+    expect(m.leaveBarbershop).toHaveBeenCalledWith("loja-1")
+    expect(m.fetchLeaveSummary).toHaveBeenCalledWith("loja-1")
+  })
+
+  it("banco ainda sem a 0057: Mais não oferece Sair da barbearia (a função não existe)", async () => {
+    m.fetchMyBarbershops.mockResolvedValue({ status: "ok", barbershops: [{ ...SHOP, papel: "barbeiro" }] })
+    m.fetchLeaveSummary.mockRejectedValue({ code: "PGRST202", message: "Could not find the function" })
+    open()
+    expect(await screen.findByRole("button", { name: "Excluir minha conta" })).toBeInTheDocument()
+    await waitFor(() => expect(m.fetchLeaveSummary).toHaveBeenCalledWith("loja-1"))
+    expect(screen.queryByRole("button", { name: "Sair da barbearia" })).not.toBeInTheDocument()
+  })
+
+  it("Conta avisa o proprietário de outra barbearia que a exclusão vira pedido; recusa do servidor aparece no pop-up", async () => {
+    m.fetchMyBarbershops.mockResolvedValue({ status: "ok", barbershops: [{ ...SHOP, papel: "barbeiro" }, { ...SHOP, id: "loja-3", nome: "Minha Loja", slug: "minha-loja", papel: "proprietario" }] })
+    m.fetchLeaveSummary.mockResolvedValue({ papel: "barbeiro", pode_sair: true, reservas_futuras: 0, comissoes_a_receber_centavos: 0, google_agenda: false })
+    m.leaveBarbershop.mockRejectedValue({ message: "owner_cannot_leave" })
+    open()
+    expect(await screen.findByText(/proprietário de Minha Loja/)).toBeInTheDocument()
+    fireEvent.click(await screen.findByRole("button", { name: "Sair da barbearia" }))
+    const dialog = await screen.findByRole("alertdialog", { name: "Sair da barbearia?" })
+    expect(within(dialog).queryByRole("combobox")).not.toBeInTheDocument()
+    await waitFor(() => expect(within(dialog).getByRole("button", { name: "Sair da barbearia" })).toBeEnabled())
+    fireEvent.click(within(dialog).getByRole("button", { name: "Sair da barbearia" }))
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("O proprietário não sai da própria barbearia por aqui.")
+  })
 })
 
 describe("Aceitar convite", () => {
@@ -760,6 +802,53 @@ describe("Acesso do cliente (porta separada da gestão)", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Excluir conta" }))
     expect(await within(dialog).findByRole("alert")).toHaveTextContent("Cancele suas reservas futuras antes de excluir a conta.")
     expect(m.signOut).not.toHaveBeenCalled()
+  })
+
+  it("login antigo: pede a senha, confirma a identidade e só então exclui", async () => {
+    m.getSession.mockResolvedValue({ user: { id: "u1", email: "maria@example.test", user_metadata: {}, app_metadata: { providers: ["email"] } } })
+    m.deleteMyAccount.mockRejectedValueOnce({ message: "reauth_required" }).mockResolvedValueOnce(undefined)
+    m.signInWithPassword.mockResolvedValue(undefined)
+    m.signOut.mockResolvedValue(undefined)
+    const { router, dialog } = await abrirExclusao()
+    fireEvent.click(within(dialog).getByRole("button", { name: "Excluir conta" }))
+    fireEvent.change(await within(dialog).findByLabelText("Sua senha"), { target: { value: "senha-ficticia" } })
+    expect(within(dialog).queryByRole("button", { name: "Confirmar com o Google" })).not.toBeInTheDocument()
+    fireEvent.click(within(dialog).getByRole("button", { name: "Confirmar e excluir" }))
+    await waitFor(() => expect(router.state.location.pathname).toBe("/barbearia-teste"))
+    expect(m.signInWithPassword).toHaveBeenCalledWith("maria@example.test", "senha-ficticia")
+    expect(m.deleteMyAccount).toHaveBeenCalledTimes(2)
+    expect(m.signOut).toHaveBeenCalledWith("local", "painel")
+    expect(m.signOut).toHaveBeenCalledWith("local", "cliente")
+  })
+
+  it("dona de barbearia não exclui direto: registra o pedido de exclusão e continua logada", async () => {
+    m.deleteMyAccount.mockRejectedValue({ message: "owner_cannot_delete" })
+    m.requestAccountDeletion.mockResolvedValue({ id: "p1", status: "pendente", bloqueios: ["proprietario"], criado_em: "2026-11-18T12:00:00Z" })
+    const { dialog } = await abrirExclusao()
+    fireEvent.click(within(dialog).getByRole("button", { name: "Excluir conta" }))
+    fireEvent.click(await within(dialog).findByRole("button", { name: "Registrar pedido de exclusão" }))
+    expect(await screen.findByRole("alertdialog", { name: "Pedido de exclusão registrado" })).toHaveTextContent("18/11/2026")
+    expect(m.requestAccountDeletion).toHaveBeenCalledTimes(1)
+    expect(m.signOut).not.toHaveBeenCalled()
+  })
+
+  it("banco ainda sem a 0057: dona vê o caminho do suporte e nenhum botão de pedido que não funcionaria", async () => {
+    m.deleteMyAccount.mockRejectedValue({ message: "owner_cannot_delete" })
+    m.fetchMyDeletionRequest.mockResolvedValue({ supported: false, pending: null })
+    const { dialog } = await abrirExclusao()
+    fireEvent.click(within(dialog).getByRole("button", { name: "Excluir conta" }))
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("fale com o suporte")
+    await waitFor(() => expect(m.fetchMyDeletionRequest).toHaveBeenCalled())
+    expect(within(dialog).queryByRole("button", { name: "Registrar pedido de exclusão" })).not.toBeInTheDocument()
+  })
+
+  it("pedido já registrado: mostra a data e não oferece outro", async () => {
+    m.deleteMyAccount.mockRejectedValue({ message: "owner_cannot_delete" })
+    m.fetchMyDeletionRequest.mockResolvedValue({ supported: true, pending: { id: "p1", status: "pendente", bloqueios: ["proprietario"], criado_em: "2026-11-10T12:00:00Z" } })
+    const { dialog } = await abrirExclusao()
+    fireEvent.click(within(dialog).getByRole("button", { name: "Excluir conta" }))
+    expect(await within(dialog).findByText(/pedido de exclusão de 10\/11\/2026 está em análise/)).toBeInTheDocument()
+    expect(within(dialog).queryByRole("button", { name: "Registrar pedido de exclusão" })).not.toBeInTheDocument()
   })
 
   it("cancelar a exclusão não apaga nada", async () => {

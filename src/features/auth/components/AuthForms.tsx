@@ -305,11 +305,12 @@ export function RecoverForm({ next, onViewChange }: ViewProps & { next: string }
 }
 
 /** `area`: a sessão de recuperação é a da área que pediu o link (painel ou cliente). */
-export function NewPasswordForm({ onDone, area }: { onDone: () => void; area: AuthArea }) {
+/** `save`: troca a senha na sessão temporária da recuperação; sem ele (link antigo), na sessão da área. */
+export function NewPasswordForm({ onDone, area, save }: { onDone: () => void; area: AuthArea; save?: (senha: string) => Promise<void> }) {
   const form = useAuthForm(
     (values) => validateNewPassword({ senha: values.senha, confirmacao: values.confirmacao }),
     async (values) => {
-      await updatePassword(values.senha, area)
+      await (save ? save(values.senha) : updatePassword(values.senha, area))
       onDone()
     }
   )
@@ -318,7 +319,7 @@ export function NewPasswordForm({ onDone, area }: { onDone: () => void; area: Au
     <form noValidate onSubmit={form.onSubmit} className="animate-element animate-delay-300 flex flex-col gap-4">
       <FormAlert message={form.serverError} />
       <AuthInput label="Nova senha" name="senha" type="password" autoComplete="new-password" error={form.errors.senha} />
-      <AuthInput label="Confirmar senha" name="confirmacao" type="password" autoComplete="new-password" error={form.errors.confirmacao} />
+      <AuthInput label="Confirmar nova senha" name="confirmacao" type="password" autoComplete="new-password" error={form.errors.confirmacao} />
       <Button type="submit" className={SUBMIT_CLASS} disabled={form.pending}>
         {form.pending ? "Salvando…" : "Salvar nova senha"}
       </Button>

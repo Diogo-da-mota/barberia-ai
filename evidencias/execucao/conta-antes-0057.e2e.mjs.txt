@@ -1,0 +1,78 @@
+// Front novo com o banco ANTES da migration 0057 (Chrome real, rede do Supabase simulada): as funções novas não existem
+// (PGRST202/PGRST205) e delete_my_account é a da 0056 (sem reautenticação). Nada pode aparecer quebrado.
+// Uso: salvar como .mjs e rodar com o servidor local no ar:  node conta-antes-0057.e2e.mjs <pasta-de-capturas>
+
+import { createRequire } from "node:module"
+const require = createRequire("/Users/diogomota/.npm/_npx/b234c773f454f454/node_modules/")
+const { chromium } = require("playwright-core")
+const BASE = "http://localhost:5173", OUT = process.argv[2]
+const b64 = (o) => Buffer.from(JSON.stringify(o)).toString("base64url")
+const now = () => Math.floor(Date.now() / 1000)
+const USER = { id: "00000000-0000-4000-8000-0000000000b1", aud: "authenticated", role: "authenticated", email: "carlos@example.test", app_metadata: { provider: "email", providers: ["email"] }, user_metadata: { full_name: "Carlos Fictício" }, identities: [], created_at: new Date().toISOString() }
+const JWT = `${b64({ alg: "none" })}.${b64({ sub: USER.id, exp: now() + 3600, role: "authenticated", amr: [{ method: "password", timestamp: now() - 7200 }] })}.teste`
+const SESSION = { access_token: JWT, refresh_token: "teste", token_type: "bearer", expires_in: 3600, expires_at: now() + 3600, user: USER }
+const SHOPS = [
+  { papel: "barbeiro", barbershops: { id: "loja-1", nome: "Barbearia Central", slug: "barbearia-central", endereco: "Rua de Teste, 10", status: "ativo", fuso: "America/Sao_Paulo" } },
+  { papel: "proprietario", barbershops: { id: "loja-9", nome: "Minha Loja", slug: "minha-loja", endereco: "Rua B, 2", status: "ativo", fuso: "America/Sao_Paulo" } },
+]
+const NOVAS = new Set(["get_leave_summary", "leave_barbershop", "request_account_deletion"])
+
+async function open({ width, height, dono = false }) {
+  const browser = await chromium.launch({ channel: "chrome", headless: true })
+  const context = await browser.newContext({ viewport: { width, height } })
+  const page = await context.newPage()
+  const errors = [], calls = []
+  page.on("pageerror", (e) => errors.push(e.message))
+  page.on("console", (m) => { if (m.type() === "error" && !/Failed to load resource|status of 4\d\d/.test(m.text())) errors.push(m.text()) })
+  await context.addInitScript(({ s }) => { localStorage.setItem("barberia:theme", "dark"); localStorage.setItem("barberia-auth-painel", JSON.stringify(s)) }, { s: SESSION })
+  await context.route(/supabase\.co|cloudfront\.net/, async (route) => {
+    const req = route.request(), url = new URL(req.url()), p = url.pathname
+    const json = (b, st = 200) => route.fulfill({ status: st, contentType: "application/json", body: JSON.stringify(b) })
+    if (!url.hostname.includes("supabase")) return route.fulfill({ status: 404, body: "" })
+    if (p === "/auth/v1/user") return json(USER)
+    if (p.startsWith("/auth/")) { calls.push(p); return json({}) }
+    if (p.includes("/rpc/")) {
+      const fn = p.split("/rpc/")[1]; calls.push(fn)
+      if (NOVAS.has(fn)) return json({ code: "PGRST202", details: null, hint: null, message: `Could not find the function public.${fn}` }, 404)
+      if (fn === "delete_my_account") return dono ? json({ code: "P0001", details: null, hint: null, message: "owner_cannot_delete" }, 400) : route.fulfill({ status: 204, body: "" })
+      return json(null)
+    }
+    const t = p.replace("/rest/v1/", "")
+    if (t.startsWith("account_deletion_requests")) { calls.push("tabela:account_deletion_requests"); return json({ code: "PGRST205", details: null, hint: null, message: "Could not find the table" }, 404) }
+    if (t.startsWith("memberships")) return json(dono ? SHOPS : [SHOPS[0]])
+    return json(req.headers()["accept"]?.includes("vnd.pgrst.object") ? null : [])
+  })
+  return { browser, page, errors, calls }
+}
+let ok = 0, bad = 0
+const check = (name, pass, detail = "") => { pass ? ok++ : bad++; console.log(`${pass ? "PASS" : "FAIL"}  ${name}${detail ? `  (${detail})` : ""}`) }
+
+for (const [w, h] of [[1440, 900], [390, 844]]) {
+  const tag = `${w}px`
+  let { browser, page, errors, calls } = await open({ width: w, height: h })
+  await page.goto(`${BASE}/mais`, { waitUntil: "load" })
+  await page.getByRole("heading", { name: "Conta" }).waitFor({ timeout: 20000 })
+  await page.waitForTimeout(800)
+  check(`${tag} sem a 0057: não oferece "Sair da barbearia" (a função não existe no banco)`, !(await page.getByRole("button", { name: "Sair da barbearia" }).isVisible()))
+  await page.getByRole("button", { name: "Excluir minha conta" }).click()
+  const dlg = page.getByRole("alertdialog", { name: "Excluir sua conta?" })
+  await dlg.getByRole("button", { name: "Excluir conta" }).click()
+  await page.waitForURL(`${BASE}/`, { timeout: 10000 })
+  check(`${tag} sem a 0057: excluir funciona como na 0056 (sem pedir senha)`, calls.filter((c) => c === "delete_my_account").length === 1)
+  check(`${tag} sem a 0057: sem erro no console (barbeiro)`, errors.length === 0, errors.join(" | "))
+  await browser.close()
+
+  ;({ browser, page, errors, calls } = await open({ width: w, height: h, dono: true }))
+  await page.goto(`${BASE}/mais`, { waitUntil: "load" })
+  await page.getByRole("button", { name: "Excluir minha conta" }).click()
+  const d2 = page.getByRole("alertdialog", { name: "Excluir sua conta?" })
+  await d2.getByRole("button", { name: "Excluir conta" }).click()
+  await d2.getByRole("alert").waitFor({ timeout: 5000 })
+  await page.waitForTimeout(500)
+  check(`${tag} sem a 0057: dono vê "fale com o suporte" e nenhum botão de pedido que não funciona`, /suporte/.test(await d2.getByRole("alert").innerText()) && !(await d2.getByRole("button", { name: "Registrar pedido de exclusão" }).isVisible()))
+  await page.screenshot({ path: `${OUT}/${w}-antes-0057-dono.png` })
+  check(`${tag} sem a 0057: sem erro no console (dono)`, errors.length === 0, errors.join(" | "))
+  await browser.close()
+}
+console.log(`\n${ok} PASS, ${bad} FAIL`)
+process.exit(bad ? 1 : 0)

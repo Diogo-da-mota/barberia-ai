@@ -7,19 +7,19 @@ import { Panel } from "@/ui/finance"
 import { toast } from "@/ui/sonner"
 import { NewPasswordForm } from "../components/AuthForms"
 import { authDoor, consumeNext, panelAuthPath, parseAuthCallback, peekNext, safeNext, type CallbackError } from "../domain"
-import { finishAuthCallback, type AccountSwitch } from "../services/auth"
+import { finishAuthCallback, signOut, type AccountSwitch, type PasswordRecovery } from "../services/auth"
 
-type Outcome = "recovery" | "signed-in" | "confirmar" | CallbackError
+type Outcome = "recovery" | "senha-alterada" | "signed-in" | "confirmar" | CallbackError
 
 /**
- * Link expirado ou já usado: volta à porta com a opção de pedir outro. Sem o verificador PKCE (e-mail antigo aberto em outro
- * navegador): o e-mail já foi confirmado, mas o login não conclui aqui.
+ * Link expirado, inválido ou já usado: volta à porta com a opção de pedir outro. Sem o verificador PKCE (e-mail no modelo
+ * antigo, com `code`, aberto em outro navegador): o cadastro já foi confirmado; a nova senha precisa de um link novo.
  */
 function failure(error: unknown, tipo: string | null): CallbackError {
   const code = (error as { code?: string })?.code
   if (code === "otp_expired") return "link-expirado"
   if (code !== "pkce_code_verifier_not_found") return "falha"
-  return tipo === "cadastro" ? "confirmado" : tipo === "recuperar" ? "outro-navegador" : "falha"
+  return tipo === "cadastro" ? "confirmado" : tipo === "recuperar" ? "link-invalido" : "falha"
 }
 
 /**
@@ -35,7 +35,9 @@ export function AuthCallback() {
   const { session, loading } = useAuth(area)
   const [outcome, setOutcome] = useState<Outcome | null>(null)
   // Link de e-mail de outra conta (ou, sem sessão, de conta que este navegador não pediu): só entra se a pessoa escolher a conta do link.
-  const [troca, setTroca] = useState<(AccountSwitch & { recovery: boolean }) | null>(null)
+  const [troca, setTroca] = useState<AccountSwitch | null>(null)
+  // Nova senha pelo link do e-mail: sessão temporária da conta do link; a sessão aberta nesta área não muda.
+  const [recuperacao, setRecuperacao] = useState<PasswordRecovery | null>(null)
   const [escolhendo, setEscolhendo] = useState(false)
   // O destino guardado é um só no navegador: se um fluxo da outra área começou depois, ele não vale para esta.
   const own = (path: unknown) => { const next = safeNext(path); return areaOf(next) === area ? next : null }
@@ -50,13 +52,14 @@ export function AuthCallback() {
     if (!pending) return
     let active = true
     finishAuthCallback(area, callback)
-      .then(({ recovery, troca: outra }) => {
+      .then(({ recovery, troca: outra, recuperacao: nova }) => {
         if (!active) return
         if (outra) {
-          setTroca({ ...outra, recovery: recovery || callback.isRecovery })
+          setTroca(outra)
           setOutcome("confirmar")
           return
         }
+        if (nova) setRecuperacao(nova)
         setOutcome(recovery || callback.isRecovery ? "recovery" : "signed-in")
       })
       .catch((error: unknown) => { if (active) setOutcome(failure(error, callback.tipo)) })
@@ -65,7 +68,8 @@ export function AuthCallback() {
     return () => { active = false }
   }, [area, callback, pending])
 
-  const showNewPassword = outcome === "recovery" && !loading && Boolean(session)
+  // Com `recuperacao` não depende de sessão na área; sem ela (link antigo com `code`), a senha é trocada na sessão da área.
+  const showNewPassword = outcome === "recovery" && !loading && Boolean(recuperacao ?? session)
 
   useEffect(() => {
     // Falhou ou não havia nada a concluir: volta pela mesma porta de onde a pessoa saiu (cliente → barbearia; equipe → painel)
@@ -73,7 +77,7 @@ export function AuthCallback() {
     const door = (erro: CallbackError | null) => leave(erro ? `${failDoor}?erro=${erro}` : failDoor)
     if (callback.error) return door(callback.error)
     if (!pending) return door(null)
-    if (outcome === null || outcome === "confirmar" || loading || showNewPassword) return
+    if (outcome === null || outcome === "confirmar" || outcome === "senha-alterada" || loading || showNewPassword) return
     if (outcome === "signed-in" && session) {
       leave(destination)
       return
@@ -84,7 +88,7 @@ export function AuthCallback() {
   if (outcome === "confirmar" && troca) {
     const usarLink = () => {
       setEscolhendo(true)
-      troca.confirmar().then(() => setOutcome(troca.recovery ? "recovery" : "signed-in"), () => setOutcome("falha"))
+      troca.confirmar().then(() => setOutcome("signed-in"), () => setOutcome("falha"))
     }
     // Mantém a sessão atual (a do link é encerrada) e segue para onde iria; sem sessão, volta à porta sem entrar
     const manter = () => {
@@ -138,17 +142,44 @@ export function AuthCallback() {
         <Panel className="flex w-full max-w-[480px] flex-col gap-4 p-5 sm:p-6">
           <div className="flex flex-col gap-1.5">
             <h1 className="font-display text-2xl font-bold tracking-wide">Definir nova senha</h1>
-            <p className="text-sm text-muted-foreground">Escolha a senha que você vai usar para entrar.</p>
+            <p className="text-sm text-muted-foreground">
+              Escolha a senha que você vai usar para entrar
+              {recuperacao?.email ? <> na conta <strong className="text-foreground">{recuperacao.email}</strong></> : null}.
+            </p>
           </div>
-          <NewPasswordForm
-            area={area}
-            onDone={() => {
-              toast.success("Senha alterada.")
-              // Volta pela porta de onde pediu a recuperação; em outro navegador, para onde a conta foi criada
-              consumeNext()
-              navigate(destination, { replace: true })
-            }}
-          />
+          <NewPasswordForm area={area} save={recuperacao?.salvar} onDone={() => setOutcome("senha-alterada")} />
+        </Panel>
+      </main>
+    )
+  }
+
+  if (outcome === "senha-alterada") {
+    // Nada entra sozinho: quem já estava conectado continua na própria conta; a conta recuperada só abre por escolha.
+    const go = (to: string) => { consumeNext(); navigate(to, { replace: true }) }
+    const conectado = session?.user.email ?? null
+    const outraConta = Boolean(session && recuperacao?.email && recuperacao.email.toLowerCase() !== conectado?.toLowerCase())
+    const entrarNaRecuperada = () => {
+      setEscolhendo(true)
+      signOut("local", area).then(() => go(failDoor), () => { setEscolhendo(false); toast.error("Não foi possível sair da conta atual. Tente novamente.") })
+    }
+    return (
+      <main className="flex min-h-dvh items-center justify-center bg-background p-4 text-foreground">
+        <Panel className="flex w-full max-w-[480px] flex-col gap-4 p-5 sm:p-6">
+          <div role="status" className="flex flex-col gap-1.5">
+            <h1 className="font-display text-2xl font-bold tracking-wide">Senha alterada</h1>
+            <p className="text-sm text-muted-foreground">Senha alterada com sucesso. Agora você pode entrar na sua conta.</p>
+            {outraConta && (
+              <p className="text-sm text-muted-foreground">
+                Você continua conectado como <strong className="text-foreground">{conectado}</strong>. A senha alterada é da conta{" "}
+                <strong className="text-foreground">{recuperacao?.email}</strong>.
+              </p>
+            )}
+          </div>
+          <div className="flex flex-col gap-2">
+            {!session && <Button onClick={() => go(failDoor)}>Entrar na minha conta</Button>}
+            {session && <Button disabled={escolhendo} onClick={() => go(destination)}>{outraConta ? `Continuar como ${conectado}` : "Continuar"}</Button>}
+            {outraConta && <Button variant="outline" disabled={escolhendo} onClick={entrarNaRecuperada}>Sair e entrar como {recuperacao?.email}</Button>}
+          </div>
         </Panel>
       </main>
     )

@@ -33,6 +33,8 @@ let seq = 0
 async function as<T>(user: string | null, fn: () => Promise<T>): Promise<T> {
   await db.exec("reset role")
   await db.query("select set_config('request.jwt.claim.sub', $1, false)", [user ?? ""])
+  // Token como o do Supabase: login recente no amr (a 0057 exige para excluir a conta).
+  await db.query("select set_config('request.jwt.claims', $1, false)", [user ? JSON.stringify({ sub: user, amr: [{ method: "password", timestamp: Math.floor(Date.now() / 1000) }] }) : ""])
   await db.exec(`set role ${user ? "authenticated" : "anon"}`)
   try {
     return await fn()
