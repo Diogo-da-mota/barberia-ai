@@ -13,12 +13,14 @@ const m = vi.hoisted(() => ({
   setBookingStatus: vi.fn(), fetchMyBookings: vi.fn(), fetchShopBookings: vi.fn(), fetchBlocks: vi.fn(), createBlock: vi.fn(), deleteBlock: vi.fn(),
   fetchWorkingHours: vi.fn(), saveWorkingHours: vi.fn(), acceptInvite: vi.fn(), createInvite: vi.fn(), fetchInvites: vi.fn(), updateShopInfo: vi.fn(),
   fetchProfessionals: vi.fn(), fetchCustomerBookings: vi.fn(), fetchCustomerConsents: vi.fn(), fetchShopDetails: vi.fn(), fetchFiscal: vi.fn(),
+  deleteMyAccount: vi.fn(),
 }))
 
 vi.mock("@/features/home/api", () => ({ fetchMyBarbershops: m.fetchMyBarbershops }))
 vi.mock("@/features/auth/services/auth", async (original) => ({
   ...(await original<typeof import("@/features/auth/services/auth")>()),
   getSession: m.getSession, getCurrentUser: m.getCurrentUser, onAuthStateChange: m.onAuthStateChange, signOut: m.signOut,
+  deleteMyAccount: m.deleteMyAccount,
 }))
 vi.mock("@/features/catalog/api", () => ({ fetchProfessionals: m.fetchProfessionals, fetchServices: async () => ({ status: "ok", data: [] }) }))
 // dados da barbearia (aba Dados de Mais): aqui, banco sem a migration 0012 (só nome, endereço em uma linha e telefone)
@@ -732,6 +734,40 @@ describe("Aceitar convite", () => {
 
 describe("Acesso do cliente (porta separada da gestão)", () => {
   const openClient = () => renderAt("/barbearia-teste/minhas-reservas", "/:slug/minhas-reservas", <ClientBookings />)
+
+  const abrirExclusao = async () => {
+    m.fetchMyBookings.mockResolvedValue([])
+    const router = openClient()
+    fireEvent.click(await screen.findByRole("button", { name: "Conta" }))
+    fireEvent.click(await screen.findByRole("button", { name: "Excluir minha conta" }))
+    return { router, dialog: await screen.findByRole("alertdialog", { name: "Excluir sua conta?" }) }
+  }
+
+  it("excluir a conta pede confirmação; confirmar apaga, sai da conta e volta para a página da barbearia", async () => {
+    m.deleteMyAccount.mockResolvedValue(undefined)
+    m.signOut.mockResolvedValue(undefined)
+    const { router, dialog } = await abrirExclusao()
+    expect(within(dialog).getByText(/reservas antigas ficam na barbearia sem seu nome/i)).toBeInTheDocument()
+    fireEvent.click(within(dialog).getByRole("button", { name: "Excluir conta" }))
+    await waitFor(() => expect(router.state.location.pathname).toBe("/barbearia-teste"))
+    expect(m.deleteMyAccount).toHaveBeenCalledTimes(1)
+    expect(m.signOut).toHaveBeenCalled()
+  })
+
+  it("com reserva futura, a exclusão mostra o motivo e não sai da conta", async () => {
+    m.deleteMyAccount.mockRejectedValue({ message: "has_upcoming_bookings" })
+    const { dialog } = await abrirExclusao()
+    fireEvent.click(within(dialog).getByRole("button", { name: "Excluir conta" }))
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("Cancele suas reservas futuras antes de excluir a conta.")
+    expect(m.signOut).not.toHaveBeenCalled()
+  })
+
+  it("cancelar a exclusão não apaga nada", async () => {
+    const { dialog } = await abrirExclusao()
+    fireEvent.click(within(dialog).getByRole("button", { name: "Manter minha conta" }))
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument())
+    expect(m.deleteMyAccount).not.toHaveBeenCalled()
+  })
 
   it("o link do WhatsApp abre a reserva indicada na conta do cliente", async () => {
     m.fetchMyBookings.mockResolvedValue([booking(), booking({ id: "b2", servico_nome: "Corte de Barba" })])

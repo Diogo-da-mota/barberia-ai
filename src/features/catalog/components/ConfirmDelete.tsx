@@ -15,11 +15,13 @@ type ConfirmDeleteProps = {
   confirmLabel: string
   cancelLabel?: string
   pending: boolean
+  /** Motivo da recusa, mostrado no próprio pop-up (ex.: exclusão da conta com reserva futura). */
+  error?: string | null
   onConfirm: () => void
   onClose: () => void
 }
 
-export function ConfirmDelete({ open, title, description, confirmLabel, cancelLabel = "Cancelar", pending, onConfirm, onClose }: ConfirmDeleteProps) {
+export function ConfirmDelete({ open, title, description, confirmLabel, cancelLabel = "Cancelar", pending, error = null, onConfirm, onClose }: ConfirmDeleteProps) {
   return (
     <AlertDialog open={open} onOpenChange={(isOpen) => !isOpen && onClose()}>
       <AlertDialogContent className="w-[calc(100%-2rem)] max-w-[480px] bg-card">
@@ -27,6 +29,7 @@ export function ConfirmDelete({ open, title, description, confirmLabel, cancelLa
           <AlertDialogTitle>{title}</AlertDialogTitle>
           <AlertDialogDescription>{description}</AlertDialogDescription>
         </AlertDialogHeader>
+        {error && <p role="alert" className="text-sm font-medium text-destructive">{error}</p>}
         <AlertDialogFooter className="flex-col gap-2 sm:flex-row">
           <Button variant="outline" className="h-11 md:h-10" onClick={onClose}>
             {cancelLabel}

@@ -66,6 +66,17 @@ export async function signUp(account: { nome: string; email: string; senha: stri
   return { needsEmailConfirmation: !data.session }
 }
 
+/**
+ * Exclui a própria conta (LGPD, migration 0056): apaga o login e tira nome, WhatsApp e e-mail das reservas antigas.
+ * O banco recusa dono de barbearia ('owner_cannot_delete') e quem tem reserva futura ('has_upcoming_bookings').
+ */
+export async function deleteMyAccount() {
+  const { error } = await supabase.rpc("delete_my_account")
+  if (error) {
+    throw error
+  }
+}
+
 /** `next`: para onde voltar depois de salvar a nova senha (cliente → barbearia; equipe → painel), em qualquer navegador. */
 export async function requestPasswordReset(email: string, next = "/dashboard") {
   rememberNext(next)

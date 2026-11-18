@@ -1,6 +1,10 @@
+import { useState } from "react"
 import { Link, useNavigate } from "react-router-dom"
-import { CalendarCheck, LogOut, Menu, Scissors, UserRound } from "lucide-react"
+import { CalendarCheck, LogOut, Menu, Scissors, Trash2, UserRound } from "lucide-react"
+import { deleteAccountErrorMessage } from "@/features/auth/domain"
 import { useAuth } from "@/features/auth/hooks/useAuth"
+import { deleteMyAccount } from "@/features/auth/services/auth"
+import { ConfirmDelete } from "@/features/catalog/components/ConfirmDelete"
 import { publicMediaUrl } from "@/features/site/api"
 import { shopBookingsPath, shopPath, shopSectionPath, type ShopSection } from "@/lib/shopPaths"
 import { Button } from "@/ui/button"
@@ -28,6 +32,28 @@ export function ClientHeader({ slug, shop, onLogin }: { slug: string; shop?: { n
   const signOut = async () => {
     navigate(shopPath(slug), { replace: true })
     try { await logout() } catch { toast.error("Não foi possível sair. Tente novamente.") }
+  }
+
+  // Exclusão da própria conta (LGPD): confirma, apaga no servidor, encerra a sessão e volta para a página da barbearia
+  const [excluir, setExcluir] = useState(false)
+  const [excluindo, setExcluindo] = useState(false)
+  const [erroExclusao, setErroExclusao] = useState<string | null>(null)
+  const fecharExclusao = () => { setExcluir(false); setErroExclusao(null) }
+  const confirmarExclusao = async () => {
+    setExcluindo(true)
+    setErroExclusao(null)
+    try {
+      await deleteMyAccount()
+    } catch (error) {
+      setErroExclusao(deleteAccountErrorMessage(error))
+      setExcluindo(false)
+      return
+    }
+    setExcluir(false)
+    setExcluindo(false)
+    navigate(shopPath(slug), { replace: true })
+    try { await logout() } catch { /* a conta já não existe: a sessão local é descartada mesmo assim */ }
+    toast.success("Sua conta foi excluída.")
   }
 
   return (
@@ -78,9 +104,21 @@ export function ClientHeader({ slug, shop, onLogin }: { slug: string; shop?: { n
                   <p className="truncate text-[13px] text-muted-foreground">{session.user.email}</p>
                 </div>
                 <Button variant="ghost" className="mt-2 h-11 w-full justify-start gap-2" onClick={signOut}><LogOut aria-hidden="true" className="h-4 w-4" />Sair</Button>
+                <Button variant="ghost" className="h-11 w-full justify-start gap-2 text-destructive hover:text-destructive" onClick={() => setExcluir(true)}><Trash2 aria-hidden="true" className="h-4 w-4" />Excluir minha conta</Button>
               </PopoverContent>
             </Popover>
           )}
+          <ConfirmDelete
+            open={excluir}
+            title="Excluir sua conta?"
+            description="Seu login e seus dados de acesso serão apagados. As reservas antigas ficam na barbearia sem seu nome, WhatsApp e e-mail. Não dá para desfazer."
+            confirmLabel="Excluir conta"
+            cancelLabel="Manter minha conta"
+            pending={excluindo}
+            error={erroExclusao}
+            onConfirm={() => void confirmarExclusao()}
+            onClose={fecharExclusao}
+          />
         </nav>
       </div>
     </header>

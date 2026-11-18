@@ -169,6 +169,17 @@ export function authErrorMessage(error: unknown): string {
   return "Não foi possível concluir. Tente novamente."
 }
 
+const DELETE_ACCOUNT_MESSAGES: Record<string, string> = {
+  has_upcoming_bookings: "Cancele suas reservas futuras antes de excluir a conta.",
+  owner_cannot_delete: "Sua conta é dona de uma barbearia. Para excluí-la, fale com o suporte.",
+}
+
+/** Motivo da recusa ao excluir a conta (migration 0056), sem detalhes internos do servidor. */
+export function deleteAccountErrorMessage(error: unknown): string {
+  const message = String((error as { message?: unknown } | null)?.message ?? "")
+  return DELETE_ACCOUNT_MESSAGES[message] ?? "Não foi possível excluir a conta. Tente novamente."
+}
+
 export type CallbackError = "link-expirado" | "falha" | "confirmado" | "outro-navegador"
 
 export const CALLBACK_NOTICES: Record<CallbackError, string> = {
