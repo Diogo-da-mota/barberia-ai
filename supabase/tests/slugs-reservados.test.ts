@@ -83,3 +83,71 @@ describe("slugs reservados (0014)", () => {
     expect(await val(ID.dono, "select private.is_reserved_slug(null)")).toBe(false)
   })
 })
+
+describe("endereço já usado fica com a barbearia de origem (0040)", () => {
+  const dono = async (slug: string) => (await db.query<{ barbershop_id: string }>("select barbershop_id from barbershop_slugs where slug = $1", [slug])).rows[0]?.barbershop_id ?? null
+  const atual = async (loja: string) => (await db.query<{ slug: string }>("select slug from barbershops where id = $1", [loja])).rows[0].slug
+
+  beforeAll(async () => {
+    // Antes da 0040 a Barbearia A já trocou 'barbearia-a' por 'barbearia-a-nova' (teste acima): o antigo vem do registro de criação.
+    expect(await atual(lojaA)).toBe("barbearia-a-nova")
+    await db.exec(readFileSync("supabase/migrations/0040_slug_registro.sql", "utf8"))
+  })
+
+  it("carga inicial: endereços atuais e o endereço de criação ficam com a própria barbearia", async () => {
+    expect([await dono("barbearia-a-nova"), await dono("barbearia-a"), await dono("barbearia-b")]).toEqual([lojaA, lojaA, lojaB])
+  })
+
+  it("outra barbearia não assume endereço antigo (create_barbershop nem set_shop_slug); a página antiga continua vazia", async () => {
+    expect(await fails(ID.donoB, "select set_shop_slug($1, 'barbearia-a')", [lojaB])).toMatch(/slug_taken/)
+    expect(await fails(ID.donoB, "select create_barbershop('Barbearia do Tico', 'barbearia-a')")).toMatch(/slug_taken/)
+    expect((await rows(null, "select get_public_shop('barbearia-a') as s"))[0]?.s ?? null).toBeNull()
+    expect(await atual(lojaB)).toBe("barbearia-b")
+  })
+
+  it("a barbearia de origem volta ao endereço antigo; o que ela deixou também fica com ela", async () => {
+    await rows(ID.dono, "select set_shop_slug($1, 'barbearia-a')", [lojaA])
+    expect(await atual(lojaA)).toBe("barbearia-a")
+    expect(await fails(ID.donoB, "select set_shop_slug($1, 'barbearia-a-nova')", [lojaB])).toMatch(/slug_taken/)
+    expect(await fails(ID.donoB, "select create_barbershop('Outra', 'barbearia-a-nova')")).toMatch(/slug_taken/)
+  })
+
+  it("endereço novo continua livre, a troca registra o anterior e palavra reservada segue recusada", async () => {
+    await rows(ID.donoB, "select set_shop_slug($1, 'barbearia-b-dois')", [lojaB])
+    expect(await dono("barbearia-b-dois")).toBe(lojaB)
+    expect(await fails(ID.dono, "select create_barbershop('Mais uma', 'barbearia-b')")).toMatch(/slug_taken/)
+    const nova = await val(ID.dono, "select create_barbershop('Barbearia Nova', 'barbearia-nova-livre')")
+    expect(await dono("barbearia-nova-livre")).toBe(nova)
+    expect(await fails(ID.donoB, "select set_shop_slug($1, 'login')", [lojaB])).toBeTruthy()
+  })
+
+  it("o registro e a função do gatilho não são acessíveis pela API", async () => {
+    for (const u of [ID.dono, null]) expect(await fails(u, "select * from barbershop_slugs")).toMatch(/permission denied/)
+    expect(await fails(ID.dono, "select private.claim_shop_slug()")).toMatch(/permission denied|trigger/)
+  })
+})
+
+describe("limite de endereços por barbearia (0053)", () => {
+  const slug = async (id: string) => val(ID.donoB, "select slug from barbershops where id = $1", [id])
+  const registro = async (s: string) => (await db.query<{ barbershop_id: string }>("select barbershop_id from barbershop_slugs where slug = $1", [s])).rows[0]?.barbershop_id ?? null
+  beforeAll(async () => {
+    await db.exec(readFileSync("supabase/migrations/0053_slug_limite.sql", "utf8"))
+  })
+
+  it("a barbearia usa até 5 endereços; o 6º novo é recusado com slug_limit e o endereço atual não muda", async () => {
+    const loja = await val(ID.donoB, "select create_barbershop('Barbearia Limite', 'limite-1')")
+    for (const n of [2, 3, 4, 5]) await rows(ID.donoB, "select set_shop_slug($1, $2)", [loja, `limite-${n}`])
+    expect(await fails(ID.donoB, "select set_shop_slug($1, 'limite-6')", [loja])).toMatch(/slug_limit/)
+    expect(await slug(loja)).toBe("limite-5")
+    expect(await registro("limite-6")).toBeNull()
+  })
+
+  it("voltar a um endereço já usado continua livre; o recusado segue disponível para outra barbearia; endereço de outra continua slug_taken", async () => {
+    const loja = await val(ID.donoB, "select id from barbershops where slug = 'limite-5'")
+    await rows(ID.donoB, "select set_shop_slug($1, 'limite-2')", [loja])
+    expect(await slug(loja)).toBe("limite-2")
+    const outra = await val(ID.gerente, "select create_barbershop('Outra Barbearia', 'limite-6')")
+    expect(await registro("limite-6")).toBe(outra)
+    expect(await fails(ID.donoB, "select set_shop_slug($1, 'barbearia-a')", [loja])).toMatch(/slug_taken/)
+  })
+})

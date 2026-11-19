@@ -171,3 +171,34 @@ describe("documentos privados (0013)", () => {
     expect(await fails(ID.dono, "select register_shop_document($1, 'outro', $2, 'o.png')", [lojaA, path(lojaA, "outro-11.png")])).toMatch(/document_limit/)
   })
 })
+
+describe("envio direto ao Storage (0052)", () => {
+  let lojaC = ""
+  const put = (user: string, bucket: string, name: string) =>
+    rows(user, "insert into storage.objects (bucket_id, name, metadata) values ($1, $2, $3) returning name", [bucket, name, { mimetype: "application/pdf", size: 1000 }])
+  beforeAll(async () => {
+    await db.exec(readFileSync("supabase/migrations/0052_storage_envio_direto.sql", "utf8"))
+    lojaC = await val(ID.dono, "select create_barbershop('Barbearia C', 'barbearia-c')")
+  })
+
+  it("o bucket antigo site-media não aceita mais envio nem troca de arquivo; ler e apagar o que já existe continuam", async () => {
+    await db.query("insert into storage.objects (bucket_id, name, metadata) values ('site-media', $1, '{}')", [`${lojaA}/antiga.png`])
+    for (const user of [ID.dono, ID.gerente]) expect(await fails(user, "insert into storage.objects (bucket_id, name) values ('site-media', $1)", [`${lojaA}/nova.png`]), user).toMatch(/row-level security/)
+    expect(await rows(ID.dono, "update storage.objects set metadata = '{}' where bucket_id = 'site-media' and name = $1 returning name", [`${lojaA}/antiga.png`])).toHaveLength(0)
+    expect(await rows(null, "select name from storage.objects where bucket_id = 'site-media' and name = $1", [`${lojaA}/antiga.png`])).toHaveLength(1)
+    expect(await rows(ID.dono, "delete from storage.objects where bucket_id = 'site-media' and name = $1 returning name", [`${lojaA}/antiga.png`])).toHaveLength(1)
+  })
+
+  it("shop-documents: o proprietário envia até 20 arquivos por barbearia; o 21º é recusado e apagar um libera a vaga", async () => {
+    for (let i = 0; i < 20; i++) await put(ID.dono, "shop-documents", `${lojaC}/doc-${i}.pdf`)
+    expect(await fails(ID.dono, "insert into storage.objects (bucket_id, name) values ('shop-documents', $1)", [`${lojaC}/doc-20.pdf`])).toMatch(/row-level security/)
+    expect(await rows(ID.dono, "delete from storage.objects where bucket_id = 'shop-documents' and name = $1 returning name", [`${lojaC}/doc-0.pdf`])).toHaveLength(1)
+    expect(await put(ID.dono, "shop-documents", `${lojaC}/doc-20.pdf`)).toHaveLength(1)
+  })
+
+  it("o limite é por barbearia e o envio continua só do proprietário", async () => {
+    expect(await put(ID.dono, "shop-documents", `${lojaA}/mais-um.pdf`)).toHaveLength(1)
+    expect(await put(ID.donoB, "shop-documents", `${lojaB}/dela-2.pdf`)).toHaveLength(1)
+    for (const user of [ID.gerente, ID.donoB]) expect(await fails(user, "insert into storage.objects (bucket_id, name) values ('shop-documents', $1)", [`${lojaA}/intruso.pdf`]), user).toMatch(/row-level security/)
+  })
+})

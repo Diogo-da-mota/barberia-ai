@@ -352,3 +352,49 @@ describe("não atualiza a reserva errada", () => {
     expect(parseEvolutionMessage({ ...base, key: { ...base.key, remoteJid: "123456789@lid", senderPn: "556492750733@s.whatsapp.net" } })).toMatchObject({ from: "556492750733", text: "SIM", contextId: null })
   })
 })
+
+describe("número de outro país não se passa pelo cliente brasileiro (0039)", () => {
+  /** MESSAGES_UPSERT vindo de um número estrangeiro (JID com o código do país dele). */
+  const estrangeiro = (jid: string, texto: string) => ({
+    key: { remoteJid: `${jid}@s.whatsapp.net`, fromMe: false, id: `3EB0${++mensagemId}` },
+    pushName: "x",
+    messageTimestamp: Math.floor(Date.now() / 1000),
+    message: { conversation: texto },
+  })
+  const bloqueios = async () => (await sql("select count(*)::int n from phone_blocklist where barbershop_id = $1", [loja.A.id]))[0].n
+
+  it("Dinamarca (+45 9123 4567) e Peru (+51 987 654 321) com a mesma chave de (45)/(51): SIM, NÃO e PARAR são ignorados", async () => {
+    for (const [cliente, jid] of [["(45) 99123-4567", "4591234567"], ["(51) 98765-4321", "51987654321"]]) {
+      evolutionSimulada()
+      const id = await reservar(cliente, { minutos: 20 })
+      await executarWorker()
+      const antes = await bloqueios()
+      for (const texto of ["Não", "Sim", "PARAR"]) {
+        expect(await receber(INSTANCIA.A, estrangeiro(jid, texto))).toEqual({ retorno: "ignorado", status: "ignorado", motivo: "telefone_invalido" })
+      }
+      expect(await presenca(id)).toEqual([])
+      expect(await reagendamento(id)).toEqual([])
+      expect(await bloqueios()).toBe(antes)
+      // o próprio cliente (número brasileiro, com ou sem o 9 no JID) continua respondendo normalmente
+      expect(await receber(INSTANCIA.A, mensagem(cliente, "Não"))).toMatchObject({ retorno: "processado", motivo: "nao" })
+      expect(await presenca(id)).toEqual(["nao"])
+      vi.unstubAllGlobals()
+      envios = []
+    }
+  })
+
+  it("cliente estrangeiro com número de 12 a 15 dígitos (ex.: Portugal) continua respondendo pela própria reserva", async () => {
+    evolutionSimulada()
+    const id = await reservar("351912345678", { minutos: 20 })
+    await executarWorker()
+    expect(envios.some((e) => e.numero === "351912345678")).toBe(true)
+    expect(await receber(INSTANCIA.A, estrangeiro("351912345678", "Não"))).toMatchObject({ retorno: "processado", motivo: "nao" })
+    expect(await presenca(id)).toEqual(["nao"])
+  })
+
+  it("o caminho sem barbearia (Cloud API) também ignora o número estrangeiro no PARAR", async () => {
+    const [r] = await svc("select process_whatsapp_reply(p_event_id => 'ext-1', p_ts => now(), p_from => '4591234567', p_context_message_id => null, p_texto => 'PARAR') r")
+    expect(r.r).toBe("ignorado")
+    expect((await sql("select motivo from inbound_webhook_events where event_id = 'ext-1'"))[0].motivo).toBe("telefone_invalido")
+  })
+})

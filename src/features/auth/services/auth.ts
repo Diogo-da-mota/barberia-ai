@@ -1,7 +1,7 @@
-import { authClients, CALLBACK_PATH, currentArea, supabase } from "@/lib/supabase"
+import { authClients, CALLBACK_PATH, currentArea, detachedAuth, supabase } from "@/lib/supabase"
 import type { AuthArea } from "@/lib/shopPaths"
 import type { Session, User } from "@supabase/supabase-js"
-import { rememberNext, safeNext } from "../domain"
+import { rememberAuthEmail, rememberNext, requestedAuthEmail, safeNext } from "../domain"
 
 /**
  * Usa a origem atual (qualquer porta ou domínio cadastrado no Supabase). `area` diz ao /auth/callback qual sessão o fluxo
@@ -17,8 +17,11 @@ function callbackUrl(tipo?: "cadastro" | "recuperar", next?: string) {
   return `${window.location.origin}${CALLBACK_PATH}?area=${currentArea()}${tipo ? `&tipo=${tipo}` : ""}${volta}`
 }
 
-/** O fluxo começa no cliente da área aberta (porta do painel ou da barbearia): o verificador PKCE fica só nele. */
-export async function signInWithGoogle(next = "/dashboard") {
+/**
+ * O fluxo começa no cliente da área aberta (porta do painel ou da barbearia): o verificador PKCE fica só nele.
+ * `selectAccount`: o Google pergunta qual conta usar (convite e reautenticação antes de excluir a conta).
+ */
+export async function signInWithGoogle(next = "/dashboard", { selectAccount = next.startsWith("/convite") } = {}) {
   rememberNext(next)
   const { error } = await supabase.auth.signInWithOAuth({
     provider: "google",
@@ -26,7 +29,7 @@ export async function signInWithGoogle(next = "/dashboard") {
       redirectTo: callbackUrl(),
       // convite da equipe: o Google sempre pergunta qual conta usar (sem entrar sozinho com a conta já aberta no navegador).
       // Não impede criar conta com outro e-mail (o Supabase cria antes de voltar); quem barra é o aceite no servidor (0035).
-      ...(next.startsWith("/convite") ? { queryParams: { prompt: "select_account" } } : {}),
+      ...(selectAccount ? { queryParams: { prompt: "select_account" } } : {}),
     },
   })
   if (error) {
@@ -44,6 +47,7 @@ export async function signInWithPassword(email: string, password: string) {
 /** `full_name` é só para exibição: papéis e permissões nunca vêm de `user_metadata`. */
 export async function signUp(account: { nome: string; email: string; senha: string; whatsapp?: string }, next = "/dashboard") {
   rememberNext(next)
+  rememberAuthEmail(account.email)
   const { data, error } = await supabase.auth.signUp({
     email: account.email,
     password: account.senha,
@@ -65,9 +69,21 @@ export async function signUp(account: { nome: string; email: string; senha: stri
   return { needsEmailConfirmation: !data.session }
 }
 
+/**
+ * Exclui a própria conta (LGPD, migration 0056): apaga o login e tira nome, WhatsApp e e-mail das reservas antigas.
+ * O banco recusa dono de barbearia ('owner_cannot_delete') e quem tem reserva futura ('has_upcoming_bookings').
+ */
+export async function deleteMyAccount() {
+  const { error } = await supabase.rpc("delete_my_account")
+  if (error) {
+    throw error
+  }
+}
+
 /** `next`: para onde voltar depois de salvar a nova senha (cliente → barbearia; equipe → painel), em qualquer navegador. */
 export async function requestPasswordReset(email: string, next = "/dashboard") {
   rememberNext(next)
+  // Sem rememberAuthEmail: o link de nova senha nunca entra na conta, nem com o `type` do link trocado para o de cadastro
   const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: callbackUrl("recuperar", next) })
   if (error) {
     throw error
@@ -113,32 +129,82 @@ export function onAuthStateChange(
   return data
 }
 
-const finishing = new Map<string, Promise<{ recovery: boolean }>>()
+/**
+ * Link de e-mail de OUTRA conta (com sessão nesta área) ou de conta que este navegador não pediu (sem sessão, `atual: null`):
+ * a sessão só muda se a pessoa confirmar a conta do link (AuthCallback).
+ */
+export type AccountSwitch = { atual: string | null; link: string; confirmar: () => Promise<void>; cancelar: () => Promise<void> }
+
+/**
+ * Recuperação de senha pelo link do e-mail: sessão temporária, só na memória desta aba, à parte da sessão aberta na área.
+ * `salvar` troca a senha da conta do link e encerra essa sessão; nunca entra em conta que não estava aberta nem mexe na
+ * sessão de OUTRA conta logada (a própria conta, se já estava aberta na área, continua aberta).
+ */
+export type PasswordRecovery = { email: string; salvar: (password: string) => Promise<void> }
+
+const finishing = new Map<string, Promise<{ recovery: boolean; troca?: AccountSwitch; recuperacao?: PasswordRecovery }>>()
 
 type CallbackInput = {
   code: string | null
   tokenHash?: string | null
   isRecovery?: boolean
-  tokens: { access_token: string; refresh_token: string } | null
 }
 
 /**
  * Conclui o retorno do Google ou do e-mail SÓ no cliente da área que iniciou o fluxo, uma vez por link (o StrictMode e um
  * segundo render não concluem duas vezes). `tokenHash`: link do e-mail (cadastro e nova senha), vale em qualquer navegador
  * ou aparelho; o servidor aceita cada link uma única vez e só até expirar. `code`: Google (PKCE, o verificador está só no
- * cliente desta área, no navegador que iniciou) e e-mails antigos. `tokens`: links antigos do fluxo implícito.
+ * cliente desta área, no navegador que iniciou) e e-mails antigos. Tokens do fluxo implícito (`#access_token=`) nunca são
+ * aceitos: o app só inicia PKCE, e um link com os tokens de outra conta trocaria a sessão desta área sem ninguém perceber.
+ * Pelo mesmo motivo, `tokenHash` é sempre conferido num cliente à parte e só entra direto quando é da conta já aberta na área
+ * ou, sem sessão, do e-mail que este navegador pediu (cadastro). Nos outros casos devolve `troca` e a sessão só muda se a
+ * pessoa confirmar a conta do link: um link da conta de outra pessoa não faz login escondido (login CSRF).
+ * Link de NOVA SENHA nunca entra na conta: devolve `recuperacao` (sessão temporária, ver PasswordRecovery).
  */
 export function finishAuthCallback(area: AuthArea, input: CallbackInput) {
-  const key = `${area}:${input.tokenHash ?? input.code ?? input.tokens?.access_token ?? ""}`
+  const key = `${area}:${input.tokenHash ?? input.code ?? ""}`
   let pending = finishing.get(key)
   if (!pending) {
     pending = (async () => {
       const auth = authClients[area].auth
       if (input.tokenHash) {
         const type = input.isRecovery ? "recovery" : "email"
-        const { error } = await auth.verifyOtp({ token_hash: input.tokenHash, type })
+        const atual = (await auth.getSession()).data.session
+        const conferencia = detachedAuth()
+        const { data, error } = await conferencia.verifyOtp({ token_hash: input.tokenHash, type })
         if (error) throw error
-        return { recovery: type === "recovery" }
+        const nova = data.session
+        if (!nova) throw new Error("Retorno sem sessão")
+        if (type === "recovery") {
+          // Vale para qualquer conta e navegador, com ou sem sessão aberta na área. O servidor aceita a troca sem a senha
+          // antiga só porque esta é a sessão de recuperação; ela termina ao salvar (ou, sem salvar, ao fechar a aba).
+          const salvar = async (password: string) => {
+            const { error: falha } = await conferencia.updateUser({ password })
+            if (falha) throw falha
+            // O servidor encerra as OUTRAS sessões da conta ao trocar a senha. Se a área já estava nesta mesma conta, ela
+            // passa a usar a sessão que sobrou (mesma pessoa, não é troca de conta); senão a sessão temporária termina aqui.
+            const aberta = (await auth.getSession()).data.session
+            if (aberta?.user.id === nova.user.id) {
+              await auth.setSession({ access_token: nova.access_token, refresh_token: nova.refresh_token }).catch(() => undefined)
+            } else {
+              await conferencia.signOut({ scope: "local" }).catch(() => undefined)
+            }
+          }
+          return { recovery: true, recuperacao: { email: nova.user.email ?? "", salvar } }
+        }
+        const confirmar = async () => {
+          const { error: falha } = await auth.setSession({ access_token: nova.access_token, refresh_token: nova.refresh_token })
+          if (falha) throw falha
+        }
+        const pedida = requestedAuthEmail()
+        const mesmaConta = atual ? nova.user.id === atual.user.id : Boolean(pedida && nova.user.email?.toLowerCase() === pedida)
+        if (mesmaConta) {
+          await confirmar()
+          return { recovery: false }
+        }
+        const cancelar = async () => { await conferencia.signOut({ scope: "local" }) }
+        const troca = { atual: atual ? atual.user.email ?? "sua conta atual" : null, link: nova.user.email ?? "outra conta", confirmar, cancelar }
+        return { recovery: false, troca }
       }
       if (input.code) {
         const { data, error } = await auth.exchangeCodeForSession(input.code)
@@ -146,10 +212,7 @@ export function finishAuthCallback(area: AuthArea, input: CallbackInput) {
         // a SDK devolve `redirectType` ("recovery" no link de nova senha), ainda fora do tipo publicado
         return { recovery: (data as { redirectType?: string | null }).redirectType === "recovery" }
       }
-      if (!input.tokens) throw new Error("Retorno sem código")
-      const { error } = await auth.setSession(input.tokens)
-      if (error) throw error
-      return { recovery: false }
+      throw new Error("Retorno sem código")
     })()
     finishing.set(key, pending)
   }

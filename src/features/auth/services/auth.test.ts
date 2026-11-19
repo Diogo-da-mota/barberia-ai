@@ -9,12 +9,15 @@ const auth = vi.hoisted(() => ({
   signOut: vi.fn(),
 }))
 
-const cliente = vi.hoisted(() => ({ signOut: vi.fn(), exchangeCodeForSession: vi.fn(), setSession: vi.fn(), updateUser: vi.fn(), verifyOtp: vi.fn() }))
+const cliente = vi.hoisted(() => ({ signOut: vi.fn(), exchangeCodeForSession: vi.fn(), setSession: vi.fn(), updateUser: vi.fn(), verifyOtp: vi.fn(), getSession: vi.fn() }))
+/** Cliente à parte (sem sessão guardada) que confere o link quando a área já tem sessão. */
+const conferencia = vi.hoisted(() => ({ verifyOtp: vi.fn(), signOut: vi.fn(), updateUser: vi.fn() }))
 const area = vi.hoisted(() => ({ value: "painel" }))
 
 vi.mock("@/lib/supabase", () => ({
   supabase: { auth },
   authClients: { painel: { auth }, cliente: { auth: cliente } },
+  detachedAuth: () => conferencia,
   currentArea: () => area.value,
   CALLBACK_PATH: "/auth/callback",
 }))
@@ -25,6 +28,7 @@ const CALLBACK = `${window.location.origin}/auth/callback?area=painel`
 
 beforeEach(() => {
   vi.clearAllMocks()
+  cliente.getSession.mockResolvedValue({ data: { session: null } })
   area.value = "painel"
   sessionStorage.clear()
   localStorage.clear()
@@ -141,7 +145,7 @@ describe("duas sessões: painel e cliente", () => {
 
   it("o código do retorno é trocado só no cliente da área, uma única vez", async () => {
     cliente.exchangeCodeForSession.mockResolvedValue({ data: { redirectType: "recovery" }, error: null })
-    const input = { code: "codigo-1", tokens: null }
+    const input = { code: "codigo-1" }
     const [a, b] = await Promise.all([finishAuthCallback("cliente", input), finishAuthCallback("cliente", input)])
     expect(a).toEqual({ recovery: true })
     expect(b).toBe(a)
@@ -149,27 +153,160 @@ describe("duas sessões: painel e cliente", () => {
     expect(cliente.exchangeCodeForSession).toHaveBeenCalledWith("codigo-1")
   })
 
-  it("link do e-mail (token_hash) é verificado só no cliente da área, uma única vez, sem precisar do navegador original", async () => {
-    cliente.verifyOtp.mockResolvedValue({ data: {}, error: null })
-    const input = { code: null, tokenHash: "pkce_h1", isRecovery: true, tokens: null }
+  it("link de NOVA SENHA (token_hash): sessão temporária à parte, uma única verificação, e nunca entra na área — nem para o e-mail pedido neste navegador", async () => {
+    const maria = { access_token: "a-maria", refresh_token: "r-maria", user: { id: "u-maria", email: "maria@example.test" } }
+    auth.resetPasswordForEmail.mockResolvedValue({ error: null })
+    await requestPasswordReset(" Maria@Example.test ", "/barbearia-do-tico")
+    conferencia.verifyOtp.mockResolvedValue({ data: { session: maria, user: maria.user }, error: null })
+    conferencia.updateUser.mockResolvedValue({ data: {}, error: null })
+    conferencia.signOut.mockResolvedValue({ error: null })
+    const input = { code: null, tokenHash: "pkce_h1", isRecovery: true }
     const [a, b] = await Promise.all([finishAuthCallback("cliente", input), finishAuthCallback("cliente", input)])
-    expect(a).toEqual({ recovery: true })
     expect(b).toBe(a)
-    expect(cliente.verifyOtp).toHaveBeenCalledTimes(1)
-    expect(cliente.verifyOtp).toHaveBeenCalledWith({ token_hash: "pkce_h1", type: "recovery" })
+    expect(a).toMatchObject({ recovery: true, recuperacao: { email: "maria@example.test" } })
+    expect(a.troca).toBeUndefined()
+    expect(conferencia.verifyOtp).toHaveBeenCalledTimes(1)
+    expect(conferencia.verifyOtp).toHaveBeenCalledWith({ token_hash: "pkce_h1", type: "recovery" })
+    expect(cliente.verifyOtp).not.toHaveBeenCalled()
     expect(cliente.exchangeCodeForSession).not.toHaveBeenCalled()
 
-    await finishAuthCallback("cliente", { code: null, tokenHash: "pkce_h2", isRecovery: false, tokens: null })
-    expect(cliente.verifyOtp).toHaveBeenLastCalledWith({ token_hash: "pkce_h2", type: "email" }) // confirmação de cadastro
+    await a.recuperacao!.salvar("nova-senha-1")
+    expect(conferencia.updateUser).toHaveBeenCalledWith({ password: "nova-senha-1" }) // sem senha antiga: é a sessão de recuperação
+    expect(conferencia.signOut).toHaveBeenCalledWith({ scope: "local" }) // a sessão temporária termina
+    expect(cliente.setSession).not.toHaveBeenCalled() // ninguém foi conectado
+    expect(cliente.updateUser).not.toHaveBeenCalled()
+    expect(cliente.signOut).not.toHaveBeenCalled()
+    expect(JSON.stringify({ ...localStorage, ...sessionStorage })).not.toContain("a-maria") // nenhum token gravado no navegador
+
+    // link de nova senha com o `type` trocado para o de cadastro: pedir a senha não autoriza entrar sem perguntar
+    const forjado = await finishAuthCallback("cliente", { code: null, tokenHash: "pkce_h2", isRecovery: false })
+    expect(conferencia.verifyOtp).toHaveBeenLastCalledWith({ token_hash: "pkce_h2", type: "email" })
+    expect(forjado.troca).toMatchObject({ atual: null, link: "maria@example.test" })
+    expect(cliente.setSession).not.toHaveBeenCalled()
+  })
+
+  it("nova senha da conta B com a conta A conectada: a sessão e a senha de A não são tocadas", async () => {
+    const ana = { access_token: "a-ana", refresh_token: "r-ana", user: { id: "u-ana", email: "ana@example.test" } }
+    const bia = { access_token: "a-bia", refresh_token: "r-bia", user: { id: "u-bia", email: "bia@example.test" } }
+    cliente.getSession.mockResolvedValue({ data: { session: ana } })
+    conferencia.verifyOtp.mockResolvedValue({ data: { session: bia, user: bia.user }, error: null })
+    conferencia.updateUser.mockResolvedValue({ data: {}, error: null })
+    conferencia.signOut.mockResolvedValue({ error: null })
+    const r = await finishAuthCallback("cliente", { code: null, tokenHash: "pkce_bia", isRecovery: true })
+    expect(r.troca).toBeUndefined() // sem pergunta de troca: recuperar não é entrar
+    expect(r.recuperacao!.email).toBe("bia@example.test")
+    await r.recuperacao!.salvar("nova-senha-2")
+    expect(conferencia.updateUser).toHaveBeenCalledWith({ password: "nova-senha-2" })
+    expect(cliente.setSession).not.toHaveBeenCalled()
+    expect(cliente.updateUser).not.toHaveBeenCalled()
+    expect(cliente.signOut).not.toHaveBeenCalled()
+  })
+
+  it("nova senha da PRÓPRIA conta já aberta na área: a área segue na mesma conta, com a sessão que o servidor manteve", async () => {
+    const ana = { access_token: "a-ana", refresh_token: "r-ana", user: { id: "u-ana", email: "ana@example.test" } }
+    cliente.getSession.mockResolvedValue({ data: { session: ana } })
+    conferencia.verifyOtp.mockResolvedValue({ data: { session: { ...ana, access_token: "a-rec", refresh_token: "r-rec" } }, error: null })
+    conferencia.updateUser.mockResolvedValue({ data: {}, error: null })
+    cliente.setSession.mockResolvedValue({ data: {}, error: null })
+    const r = await finishAuthCallback("cliente", { code: null, tokenHash: "pkce_ana", isRecovery: true })
+    expect(cliente.setSession).not.toHaveBeenCalled() // nada muda antes de salvar
+    await r.recuperacao!.salvar("nova-senha-3")
+    expect(cliente.setSession).toHaveBeenCalledWith({ access_token: "a-rec", refresh_token: "r-rec" })
+    expect(conferencia.signOut).not.toHaveBeenCalled()
+    expect(cliente.signOut).not.toHaveBeenCalled()
+  })
+
+  it("nova senha recusada pelo servidor (fraca, igual à anterior, sessão vencida) repassa o erro e não encerra nada da área", async () => {
+    const bia = { access_token: "a-bia", refresh_token: "r-bia", user: { id: "u-bia", email: "bia@example.test" } }
+    conferencia.verifyOtp.mockResolvedValue({ data: { session: bia, user: bia.user }, error: null })
+    conferencia.updateUser.mockResolvedValue({ data: {}, error: { code: "same_password" } })
+    const r = await finishAuthCallback("cliente", { code: null, tokenHash: "pkce_bia2", isRecovery: true })
+    await expect(r.recuperacao!.salvar("12345678")).rejects.toMatchObject({ code: "same_password" })
+    expect(conferencia.signOut).not.toHaveBeenCalled() // pode tentar outra senha na mesma tela
+    expect(cliente.signOut).not.toHaveBeenCalled()
+  })
+
+  it("cadastro guarda o e-mail pedido: a confirmação dessa conta entra sem perguntar", async () => {
+    const ana = { access_token: "a-ana", refresh_token: "r-ana", user: { id: "u-ana", email: "ana@example.test" } }
+    auth.signUp.mockResolvedValue({ data: { user: { identities: [{}] }, session: null }, error: null })
+    await signUp({ nome: "Ana", email: "ana@example.test", senha: "12345678" }, "/barbearia-do-tico")
+    conferencia.verifyOtp.mockResolvedValue({ data: { session: ana, user: ana.user }, error: null })
+    cliente.setSession.mockResolvedValue({ data: {}, error: null })
+    expect(await finishAuthCallback("cliente", { code: null, tokenHash: "pkce_cadastro" })).toEqual({ recovery: false })
+    expect(cliente.setSession).toHaveBeenCalledWith({ access_token: "a-ana", refresh_token: "r-ana" })
+  })
+
+  it("sem sessão, link de e-mail de conta que este navegador NÃO pediu não entra sozinho: pergunta mostrando a conta do link", async () => {
+    const joao = { access_token: "a-joao", refresh_token: "r-joao", user: { id: "u-joao", email: "joao.silva@example.test" } }
+    conferencia.verifyOtp.mockResolvedValue({ data: { session: joao, user: joao.user }, error: null })
+    cliente.setSession.mockResolvedValue({ data: {}, error: null })
+    conferencia.signOut.mockResolvedValue({ error: null })
+
+    const r = await finishAuthCallback("cliente", { code: null, tokenHash: "pkce_de_outro", isRecovery: false })
+    expect(cliente.verifyOtp).not.toHaveBeenCalled()
+    expect(cliente.setSession).not.toHaveBeenCalled() // nada é gravado na área antes da escolha
+    expect(r).toMatchObject({ recovery: false, troca: { atual: null, link: "joao.silva@example.test" } })
+
+    await r.troca!.cancelar()
+    expect(conferencia.signOut).toHaveBeenCalledWith({ scope: "local" })
+    expect(cliente.setSession).not.toHaveBeenCalled()
+    await r.troca!.confirmar()
+    expect(cliente.setSession).toHaveBeenCalledWith({ access_token: "a-joao", refresh_token: "r-joao" })
   })
 
   it("link do e-mail expirado ou já usado repassa o erro do servidor", async () => {
-    cliente.verifyOtp.mockResolvedValue({ data: {}, error: { code: "otp_expired" } })
-    await expect(finishAuthCallback("cliente", { code: null, tokenHash: "pkce_h3", tokens: null })).rejects.toMatchObject({ code: "otp_expired" })
+    conferencia.verifyOtp.mockResolvedValue({ data: {}, error: { code: "otp_expired" } })
+    await expect(finishAuthCallback("cliente", { code: null, tokenHash: "pkce_h3" })).rejects.toMatchObject({ code: "otp_expired" })
+    expect(cliente.setSession).not.toHaveBeenCalled()
+  })
+
+  it("retorno sem código nem token_hash (tokens do fluxo implícito no link) é recusado e nunca troca a sessão", async () => {
+    const input = { code: null, tokenHash: null, tokens: { access_token: "token-de-outra-conta", refresh_token: "r" } } as never
+    await expect(finishAuthCallback("cliente", input)).rejects.toThrow("Retorno sem código")
+    await expect(finishAuthCallback("painel", input)).rejects.toThrow("Retorno sem código")
+    expect(cliente.setSession).not.toHaveBeenCalled()
   })
 
   it("sem o verificador PKCE (link aberto em outro navegador) repassa o erro", async () => {
     cliente.exchangeCodeForSession.mockResolvedValue({ data: {}, error: { code: "pkce_code_verifier_not_found" } })
-    await expect(finishAuthCallback("cliente", { code: "codigo-2", tokens: null })).rejects.toMatchObject({ code: "pkce_code_verifier_not_found" })
+    await expect(finishAuthCallback("cliente", { code: "codigo-2" })).rejects.toMatchObject({ code: "pkce_code_verifier_not_found" })
+  })
+
+  it("com sessão de outra conta aberta, o link de e-mail não troca a sessão sozinho: pergunta mostrando as duas contas", async () => {
+    const maria = { access_token: "a-maria", refresh_token: "r-maria", user: { id: "u-maria", email: "maria@example.test" } }
+    const outra = { access_token: "a-outra", refresh_token: "r-outra", user: { id: "u-outra", email: "outra@example.test" } }
+    cliente.getSession.mockResolvedValue({ data: { session: maria } })
+    conferencia.verifyOtp.mockResolvedValue({ data: { session: outra, user: outra.user }, error: null })
+    cliente.setSession.mockResolvedValue({ data: {}, error: null })
+    conferencia.signOut.mockResolvedValue({ error: null })
+
+    const r = await finishAuthCallback("cliente", { code: null, tokenHash: "pkce_outra", isRecovery: false })
+    expect(conferencia.verifyOtp).toHaveBeenCalledWith({ token_hash: "pkce_outra", type: "email" })
+    expect(cliente.verifyOtp).not.toHaveBeenCalled()
+    expect(cliente.setSession).not.toHaveBeenCalled() // a sessão da Maria segue intacta até ela escolher
+    expect(r).toMatchObject({ recovery: false, troca: { atual: "maria@example.test", link: "outra@example.test" } })
+
+    await r.troca!.cancelar()
+    expect(conferencia.signOut).toHaveBeenCalledWith({ scope: "local" }) // a sessão do link é encerrada
+    expect(cliente.setSession).not.toHaveBeenCalled()
+    await r.troca!.confirmar()
+    expect(cliente.setSession).toHaveBeenCalledWith({ access_token: "a-outra", refresh_token: "r-outra" })
+  })
+
+  it("com sessão da MESMA conta, o link de e-mail conclui sem perguntar", async () => {
+    const maria = { access_token: "a1", refresh_token: "r1", user: { id: "u-maria", email: "maria@example.test" } }
+    cliente.getSession.mockResolvedValue({ data: { session: maria } })
+    conferencia.verifyOtp.mockResolvedValue({ data: { session: { ...maria, access_token: "a2", refresh_token: "r2" } }, error: null })
+    cliente.setSession.mockResolvedValue({ data: {}, error: null })
+    expect(await finishAuthCallback("cliente", { code: null, tokenHash: "pkce_mesma", isRecovery: false })).toEqual({ recovery: false })
+    expect(cliente.setSession).toHaveBeenCalledWith({ access_token: "a2", refresh_token: "r2" })
+    expect(cliente.verifyOtp).not.toHaveBeenCalled()
+  })
+
+  it("link expirado conferido com sessão aberta repassa o erro e não mexe na sessão", async () => {
+    cliente.getSession.mockResolvedValue({ data: { session: { user: { id: "u-maria" } } } })
+    conferencia.verifyOtp.mockResolvedValue({ data: {}, error: { code: "otp_expired" } })
+    await expect(finishAuthCallback("cliente", { code: null, tokenHash: "pkce_velho" })).rejects.toMatchObject({ code: "otp_expired" })
+    expect(cliente.setSession).not.toHaveBeenCalled()
   })
 })

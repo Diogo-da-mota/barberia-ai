@@ -34,10 +34,13 @@ export async function processarConfirmacoesELembretes(rpc: Rpc, sendText: SendTe
       if (!texto) throw new Error("tipo_sem_mensagem")
       providerId = await sendText(item.instancia, toE164(item.destino), item.tipo.startsWith("lembrete_") ? withReminderReply(texto) : texto)
     } catch (err) {
-      erro = (err instanceof Error ? err.message : "erro").slice(0, 300)
+      // corta por caractere (não por unidade UTF-16) e troca metade solta de emoji (já vinda partida no erro do provedor) por
+      // U+FFFD: o banco recusa texto com ela, e o registro do erro falharia
+      erro = Array.from(err instanceof Error ? err.message : "erro").slice(0, 300).join("").replace(/[\uD800-\uDFFF]/gu, "\uFFFD")
     }
     // Se o registro falhar, a linha fica "enviando" e volta à fila em 10 minutos (entrega pelo menos uma vez).
-    await rpc("complete_outbox", { p_id: item.id, p_ok: erro === null, p_provider_message_id: providerId, p_erro: erro })
+    const fim = await rpc("complete_outbox", { p_id: item.id, p_ok: erro === null, p_provider_message_id: providerId, p_erro: erro })
+    if (fim.error) console.error("[fila] complete_outbox falhou; a linha volta pela fila com o teto de tentativas", item.id)
     if (erro === null) enviados++
     else falhas++
   }

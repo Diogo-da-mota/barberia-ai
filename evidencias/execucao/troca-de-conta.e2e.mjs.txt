@@ -1,0 +1,107 @@
+// /auth/callback: link de e-mail (token_hash) de OUTRA conta com sessão aberta não troca a sessão sem confirmação.
+// Chrome real sem interface, rede do Supabase simulada, dados fictícios; nada sai para a internet.
+// Uso: npx vite --port 5199 --strictPort  (em outro terminal)  e  node troca-de-conta.e2e.mjs <playwright-core> [pasta das capturas]
+import { createRequire } from "node:module"
+const require = createRequire(import.meta.url)
+const { chromium } = require(process.argv[2])
+const SHOTS = process.argv[3] ?? null
+
+const BASE = process.env.BASE ?? "http://localhost:5199"
+let ok = 0, bad = 0
+const check = (name, pass, detail = "") => { pass ? ok++ : bad++; console.log(`${pass ? "PASS" : "FAIL"}  ${name}${detail ? `  (${detail})` : ""}`) }
+
+const b64 = (o) => Buffer.from(JSON.stringify(o)).toString("base64url")
+const exp = () => Math.floor(Date.now() / 1000) + 3600
+const mkUser = (id, email, nome) => ({ id, aud: "authenticated", role: "authenticated", email, email_confirmed_at: new Date().toISOString(), app_metadata: { provider: "email" }, user_metadata: { full_name: nome }, identities: [], created_at: new Date().toISOString() })
+const mkJwt = (u, tag) => `${b64({ alg: "HS256", typ: "JWT" })}.${b64({ sub: u.id, email: u.email, exp: exp(), role: "authenticated", aal: "aal1", amr: [{ method: "password", timestamp: Math.floor(Date.now() / 1000) }], session_id: `s-${tag}` })}.assinatura-ficticia`
+const MARIA = mkUser("00000000-0000-4000-8000-0000000000a1", "maria@example.test", "Maria")
+const OUTRA = mkUser("00000000-0000-4000-8000-0000000000b2", "outra@example.test", "Outra Conta")
+const JWT = { maria: mkJwt(MARIA, "maria"), mariaLink: mkJwt(MARIA, "maria-link"), outra: mkJwt(OUTRA, "outra") }
+const quem = (t) => (t === JWT.maria || t === JWT.mariaLink ? "MARIA" : t === JWT.outra ? "OUTRA" : t ? "?" : "nenhuma")
+const sessionOf = (u, jwt, rt) => ({ access_token: jwt, refresh_token: rt, token_type: "bearer", expires_in: 3600, expires_at: exp(), user: u })
+const SHOP = { id: "loja-1", nome: "Barbearia Teste", slug: "barbearia-teste", endereco: "Rua de Teste, 10", telefone: "11999990000", fuso: "America/Sao_Paulo", descricao: "", cor_destaque: "azul", template: "urbano", services: [], professionals: [], galeria: [] }
+
+const browser = await chromium.launch({ channel: "chrome", headless: true })
+
+async function run(path, { logada = true, acao = null, verifier = null, largura = 1440, captura = null } = {}) {
+  const context = await browser.newContext({ viewport: { width: largura, height: 900 } })
+  const page = await context.newPage()
+  const calls = []
+  await context.addInitScript(({ s, v }) => {
+    if (sessionStorage.getItem("__s")) return
+    sessionStorage.setItem("__s", "1")
+    if (s) localStorage.setItem("barberia-auth-cliente", JSON.stringify(s))
+    if (v) localStorage.setItem("barberia-auth-cliente-code-verifier", JSON.stringify(v))
+  }, { s: logada ? sessionOf(MARIA, JWT.maria, "rt-maria") : null, v: verifier })
+  await context.route("**/*", async (route) => {
+    const req = route.request()
+    const url = new URL(req.url())
+    if (url.hostname === "localhost") return route.continue()
+    if (!/supabase\.co$/.test(url.hostname)) return route.abort()
+    const auth = (req.headers()["authorization"] ?? "").replace(/^Bearer /, "")
+    const body = req.postData() ?? ""
+    calls.push({ method: req.method(), path: url.pathname, query: url.search, conta: quem(auth), body })
+    const json = (b, st = 200) => route.fulfill({ status: st, contentType: "application/json", body: JSON.stringify(b) })
+    if (url.pathname === "/auth/v1/user") return json(quem(auth) === "OUTRA" ? OUTRA : MARIA)
+    if (url.pathname === "/auth/v1/logout") return route.fulfill({ status: 204, body: "" })
+    if (url.pathname === "/auth/v1/verify") return json(body.includes("hash-da-maria") ? sessionOf(MARIA, JWT.mariaLink, "rt-maria-link") : sessionOf(OUTRA, JWT.outra, "rt-outra"))
+    if (url.pathname === "/auth/v1/token" && url.searchParams.get("grant_type") === "pkce") return json(sessionOf(MARIA, JWT.maria, "rt-maria-2"))
+    if (url.pathname === "/auth/v1/token") return json(sessionOf(MARIA, JWT.maria, "rt-maria"))
+    if (url.pathname.includes("/rpc/get_public_shop")) return json(SHOP)
+    if (url.pathname.includes("/rpc/")) return json(null)
+    if (url.pathname.startsWith("/rest/v1/")) return json([])
+    return json({})
+  })
+  const stored = async () => { const s = await page.evaluate(() => localStorage.getItem("barberia-auth-cliente")); return quem(s ? JSON.parse(s).access_token : null) }
+  await page.goto(BASE + path, { waitUntil: "domcontentloaded" })
+  const r = { calls }
+  if (acao) {
+    await page.getByRole("heading", { name: "Trocar de conta?" }).waitFor({ timeout: 15000 })
+    r.pergunta = true
+    r.texto = (await page.locator("main").innerText()).replace(/\s+/g, " ")
+    r.sessaoNaPergunta = await stored()
+    if (captura && SHOTS) await page.screenshot({ path: `${SHOTS}/${captura}`, fullPage: true })
+    await page.getByRole("button", { name: acao }).click()
+  }
+  await page.waitForURL((u) => !u.pathname.startsWith("/auth/callback"), { timeout: 15000 }).catch(() => {})
+  await page.waitForTimeout(1200)
+  r.titulo = await page.getByRole("heading", { name: "Definir nova senha" }).isVisible().catch(() => false)
+  r.final = new URL(page.url()).pathname
+  r.sessao = await stored()
+  r.perguntou = r.pergunta ?? await page.getByRole("heading", { name: "Trocar de conta?" }).isVisible().catch(() => false)
+  await context.close()
+  return r
+}
+const LINK = (hash, tipo = "email") => `/auth/callback?area=cliente&volta=%2Fbarbearia-teste#token_hash=${hash}&type=${tipo}`
+
+// 1) Ataque: Maria logada abre o link de cadastro de outra conta → pergunta; "Continuar como Maria" mantém a sessão dela
+const r1 = await run(LINK("hash-de-outra-conta"), { acao: "Continuar como maria@example.test", captura: "troca-de-conta-1440.png" })
+check("ataque: aparece a confirmação com as duas contas", r1.pergunta && r1.texto.includes("maria@example.test") && r1.texto.includes("outra@example.test"))
+check("ataque: enquanto pergunta, a sessão guardada continua da Maria", r1.sessaoNaPergunta === "MARIA", r1.sessaoNaPergunta)
+check("ataque: continuar mantém a Maria e segue para a barbearia", r1.sessao === "MARIA" && r1.final.startsWith("/barbearia-teste"), `${r1.sessao} ${r1.final}`)
+check("ataque: a sessão do link é encerrada no servidor (logout com o token dela)", r1.calls.some((c) => c.path === "/auth/v1/logout" && c.conta === "OUTRA"))
+
+// 2) Escolher a conta do link: troca de propósito
+const r2 = await run(LINK("hash-de-outra-conta"), { acao: "Entrar como outra@example.test", largura: 390, captura: "troca-de-conta-390.png" })
+check("escolher a conta do link troca a sessão e segue", r2.sessao === "OUTRA" && r2.final.startsWith("/barbearia-teste"), `${r2.sessao} ${r2.final}`)
+
+// 3) Link da própria Maria com ela logada: sem pergunta
+const r3 = await run(LINK("hash-da-maria"))
+check("mesma conta: conclui sem perguntar", !r3.perguntou && r3.sessao === "MARIA" && r3.final.startsWith("/barbearia-teste"), `${r3.perguntou} ${r3.sessao} ${r3.final}`)
+
+// 4) Cadastro confirmado sem sessão aberta: igual a antes
+const r4 = await run(LINK("hash-de-outra-conta"), { logada: false })
+check("cadastro sem sessão: entra direto na conta do link, sem pergunta", !r4.perguntou && r4.sessao === "OUTRA", `${r4.perguntou} ${r4.sessao} ${r4.final}`)
+
+// 5) Recuperação de senha sem sessão: mostra Definir nova senha
+const r5 = await run(LINK("hash-da-maria", "recovery"), { logada: false })
+check("recuperação sem sessão: abre Definir nova senha", r5.titulo && !r5.perguntou && r5.sessao === "MARIA", `${r5.titulo} ${r5.sessao}`)
+
+// 6) Google (PKCE) com sessão aberta: fluxo normal, sem pergunta
+const r6 = await run(`/auth/callback?area=cliente&volta=%2Fbarbearia-teste&code=codigo-ficticio`, { verifier: "verificador-ficticio" })
+check("Google (PKCE): troca o code com o verificador e segue, sem pergunta", !r6.perguntou && r6.final === "/barbearia-teste"
+  && r6.calls.some((c) => c.path === "/auth/v1/token" && /grant_type=pkce/.test(c.query) && c.body.includes("verificador-ficticio")), r6.final)
+
+await browser.close()
+console.log(`\n${ok} PASS, ${bad} FAIL`)
+process.exit(bad ? 1 : 0)

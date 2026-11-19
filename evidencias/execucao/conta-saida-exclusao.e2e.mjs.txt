@@ -1,0 +1,128 @@
+// Teste de navegador de /mais › Conta (Chrome real, rede do Supabase simulada): barbeiro em duas barbearias escolhe de qual
+// sair, vê o resumo e confirma; excluir a conta com login antigo pede a senha, reautentica e só então exclui; dono registra
+// o pedido de exclusão. Em 1440px e 390px. Não grava nada em produção (nenhuma chamada sai para o Supabase).
+// Uso: salvar como .mjs e rodar com o servidor local no ar:  node conta-saida-exclusao.e2e.mjs <pasta-de-capturas>
+
+import { createRequire } from "node:module"
+const require = createRequire("/Users/diogomota/.npm/_npx/b234c773f454f454/node_modules/")
+const { chromium } = require("playwright-core")
+const BASE = "http://localhost:5173", OUT = process.argv[2]
+const b64 = (o) => Buffer.from(JSON.stringify(o)).toString("base64url")
+const now = () => Math.floor(Date.now() / 1000)
+const USER = { id: "00000000-0000-4000-8000-0000000000b1", aud: "authenticated", role: "authenticated", email: "carlos@example.test", app_metadata: { provider: "email", providers: ["email"] }, user_metadata: { full_name: "Carlos Fictício" }, identities: [], created_at: new Date().toISOString() }
+// Login de 2 h atrás: o servidor (simulado aqui) pede reautenticação antes de excluir.
+const session = (loginAt) => {
+  const jwt = `${b64({ alg: "none" })}.${b64({ sub: USER.id, exp: now() + 3600, role: "authenticated", amr: [{ method: "password", timestamp: loginAt }] })}.teste`
+  return { access_token: jwt, refresh_token: "teste", token_type: "bearer", expires_in: 3600, expires_at: now() + 3600, user: USER }
+}
+const SHOPS = [
+  { papel: "barbeiro", barbershops: { id: "loja-1", nome: "Barbearia Central", slug: "barbearia-central", endereco: "Rua de Teste, 10", status: "ativo", fuso: "America/Sao_Paulo" } },
+  { papel: "barbeiro", barbershops: { id: "loja-2", nome: "Barbearia Norte", slug: "barbearia-norte", endereco: "Av. Fictícia, 20", status: "ativo", fuso: "America/Sao_Paulo" } },
+]
+
+async function open({ width, height, deleteError = "reauth_required" }) {
+  const browser = await chromium.launch({ channel: "chrome", headless: true })
+  const context = await browser.newContext({ viewport: { width, height }, hasTouch: width < 768 })
+  const page = await context.newPage()
+  const errors = [], calls = []
+  let deletes = 0
+  page.on("pageerror", (e) => errors.push(e.message))
+  page.on("console", (m) => { if (m.type() === "error" && !/Failed to load resource|status of 400/.test(m.text())) errors.push(m.text()) })
+  await context.addInitScript(({ s }) => { localStorage.setItem("barberia:theme", "dark"); localStorage.setItem("barberia-auth-painel", JSON.stringify(s)) }, { s: session(now() - 7200) })
+  await context.route(/supabase\.co|cloudfront\.net/, async (route) => {
+    const req = route.request(), url = new URL(req.url()), p = url.pathname
+    const json = (b, st = 200) => route.fulfill({ status: st, contentType: "application/json", body: JSON.stringify(b) })
+    const body = () => { try { return JSON.parse(req.postData() ?? "{}") } catch { return {} } }
+    if (!url.hostname.includes("supabase")) return route.fulfill({ status: 404, body: "" })
+    if (p === "/auth/v1/user") return json(USER)
+    if (p === "/auth/v1/token") { calls.push({ fn: `token:${url.searchParams.get("grant_type")}`, body: body() }); return json(session(now())) }
+    if (p.startsWith("/auth/")) { calls.push({ fn: p }); return json({}) }
+    if (p.includes("/rpc/")) {
+      const fn = p.split("/rpc/")[1], b = body(); calls.push({ fn, body: b })
+      if (fn === "get_leave_summary") return json(b.p_barbershop_id === "loja-2"
+        ? { papel: "barbeiro", pode_sair: true, reservas_futuras: 1, comissoes_a_receber_centavos: 2400, google_agenda: true }
+        : { papel: "barbeiro", pode_sair: true, reservas_futuras: 0, comissoes_a_receber_centavos: 0, google_agenda: false })
+      if (fn === "leave_barbershop") return json({ status: "saiu", reservas_futuras: 1 })
+      if (fn === "delete_my_account") {
+        deletes++
+        if (deleteError === "owner_cannot_delete" || deletes === 1) return json({ code: "P0001", details: null, hint: null, message: deleteError }, 400)
+        return route.fulfill({ status: 204, body: "" })
+      }
+      if (fn === "request_account_deletion") return json({ id: "p1", status: "pendente", bloqueios: ["proprietario"], criado_em: new Date().toISOString() })
+      return json(null)
+    }
+    const t = p.replace("/rest/v1/", "")
+    if (t.startsWith("memberships")) return json(SHOPS)
+    return json(req.headers()["accept"]?.includes("vnd.pgrst.object") ? null : [])
+  })
+  return { browser, page, errors, calls }
+}
+const shot = (page, name) => page.screenshot({ path: `${OUT}/${name}.png` })
+let ok = 0, bad = 0
+const check = (name, pass, detail = "") => { pass ? ok++ : bad++; console.log(`${pass ? "PASS" : "FAIL"}  ${name}${detail ? `  (${detail})` : ""}`) }
+const overflow = (page) => page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1)
+
+for (const [w, h] of [[1440, 900], [390, 844]]) {
+  const tag = `${w}px`
+  // ---- sair da barbearia: escolher a Norte, ver o resumo, confirmar ----
+  let { browser, page, errors, calls } = await open({ width: w, height: h })
+  await page.goto(`${BASE}/mais`, { waitUntil: "load" })
+  const conta = page.getByRole("heading", { name: "Conta" })
+  await conta.waitFor({ timeout: 20000 })
+  await conta.scrollIntoViewIfNeeded()
+  check(`${tag} Mais: card Conta com Sair da barbearia e Excluir minha conta`, await page.getByRole("button", { name: "Sair da barbearia" }).isVisible() && await page.getByRole("button", { name: "Excluir minha conta" }).isVisible())
+  check(`${tag} Mais: sem rolagem horizontal`, !(await overflow(page)))
+  await shot(page, `${w}-1-conta`)
+  await page.getByRole("button", { name: "Sair da barbearia" }).click()
+  let dlg = page.getByRole("alertdialog", { name: "Sair da barbearia?" })
+  await dlg.waitFor()
+  await dlg.getByRole("combobox", { name: "Barbearia" }).click()
+  await page.getByRole("option", { name: "Barbearia Norte" }).click()
+  await dlg.getByText("1 reserva futura").waitFor({ timeout: 5000 })
+  check(`${tag} sair: resumo da barbearia escolhida (reserva, comissão, Google Agenda)`, await dlg.getByText(/R\$\s?24,00/).isVisible() && await dlg.getByText(/Google Agenda ligado/).isVisible())
+  check(`${tag} sair: pop-up cabe na tela`, !(await overflow(page)))
+  await shot(page, `${w}-2-sair`)
+  await dlg.getByRole("button", { name: "Sair da barbearia" }).click()
+  await page.waitForURL(/\/dashboard$/, { timeout: 10000 })
+  const leave = calls.filter((c) => c.fn === "leave_barbershop")
+  check(`${tag} sair: uma chamada, só com a barbearia escolhida`, leave.length === 1 && JSON.stringify(leave[0].body) === JSON.stringify({ p_barbershop_id: "loja-2" }), JSON.stringify(leave.map((c) => c.body)))
+  check(`${tag} sair: sem erro no console`, errors.length === 0, errors.join(" | "))
+  await browser.close()
+
+  // ---- excluir a conta: login antigo → senha → exclui → sai das duas áreas ----
+  ;({ browser, page, errors, calls } = await open({ width: w, height: h }))
+  await page.goto(`${BASE}/mais`, { waitUntil: "load" })
+  await page.getByRole("button", { name: "Excluir minha conta" }).click()
+  dlg = page.getByRole("alertdialog", { name: "Excluir sua conta?" })
+  await dlg.waitFor()
+  check(`${tag} excluir: mostra o que é apagado, anonimizado e guardado`, await dlg.getByText("Será apagado").isVisible() && await dlg.getByText("Fica sem seus dados").isVisible() && await dlg.getByText("Fica guardado").isVisible())
+  await dlg.getByRole("button", { name: "Excluir conta" }).click()
+  await dlg.getByLabel("Sua senha").waitFor({ timeout: 5000 })
+  check(`${tag} excluir: login antigo pede a senha (nada foi excluído)`, calls.filter((c) => c.fn === "delete_my_account").length === 1)
+  await shot(page, `${w}-3-reautenticar`)
+  await dlg.getByLabel("Sua senha").fill("senha-ficticia")
+  await dlg.getByRole("button", { name: "Confirmar e excluir" }).click()
+  await page.waitForURL(`${BASE}/`, { timeout: 10000 })
+  const order = calls.map((c) => c.fn).filter((f) => f === "delete_my_account" || f.startsWith("token:"))
+  check(`${tag} excluir: reautentica com a senha e só então exclui`, JSON.stringify(order) === JSON.stringify(["delete_my_account", "token:password", "delete_my_account"]), JSON.stringify(order))
+  check(`${tag} excluir: senha vai só para o login, com o e-mail da conta`, calls.find((c) => c.fn === "token:password")?.body?.email === USER.email)
+  check(`${tag} excluir: sessão do painel apagada do navegador`, (await page.evaluate(() => localStorage.getItem("barberia-auth-painel"))) === null)
+  check(`${tag} excluir: sem erro no console`, errors.length === 0, errors.join(" | "))
+  await browser.close()
+
+  // ---- dono de outra barbearia: registra o pedido de exclusão ----
+  ;({ browser, page, errors, calls } = await open({ width: w, height: h, deleteError: "owner_cannot_delete" }))
+  await page.goto(`${BASE}/mais`, { waitUntil: "load" })
+  await page.getByRole("button", { name: "Excluir minha conta" }).click()
+  dlg = page.getByRole("alertdialog", { name: "Excluir sua conta?" })
+  await dlg.getByRole("button", { name: "Excluir conta" }).click()
+  await dlg.getByRole("button", { name: "Registrar pedido de exclusão" }).click()
+  const done = page.getByRole("alertdialog", { name: "Pedido de exclusão registrado" })
+  await done.waitFor({ timeout: 5000 })
+  check(`${tag} pedido: registrado e a conta continua logada`, (await page.evaluate(() => localStorage.getItem("barberia-auth-painel"))) !== null && calls.filter((c) => c.fn === "request_account_deletion").length === 1)
+  await shot(page, `${w}-4-pedido`)
+  check(`${tag} pedido: sem erro no console`, errors.length === 0, errors.join(" | "))
+  await browser.close()
+}
+console.log(`\n${ok} PASS, ${bad} FAIL`)
+process.exit(bad ? 1 : 0)

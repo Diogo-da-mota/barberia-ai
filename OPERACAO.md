@@ -27,6 +27,7 @@ Fotos em `BARBEARIA/<id da barbearia>/` (`site/logo|capa|galeria`, `painel/inici
 6. **Cópia das fotos atuais** (segredo `MEDIA_MIGRATE_SECRET`, guardado no Keychain como `barberia-media-migrate`): `curl -s -X POST https://hbkbdqctelembzqiptpi.supabase.co/functions/v1/media-migrate -H "Authorization: Bearer <anon>" -H "x-migrate-secret: $(security find-generic-password -s barberia-media-migrate -w)" -H "Content-Type: application/json" -d '{"acao":"simular"}'`; depois o mesmo com `"copiar"` (copia, confere no S3 e só então troca o caminho no banco; nada é apagado do Supabase). Rodar `"copiar"` de novo só pega o que faltou.
 **CORS (Ajustar logo/capa):** a política gerenciada SimpleCORS do CloudFront não responde com CORS quando o Chrome envia o cabeçalho `priority` (todo fetch do Chrome). Por isso o CORS vem do S3 (`CorsConfiguration` do bucket, só GET/HEAD) e a política de cache `barberia-midia-cache` põe `Origin` na chave; o editor baixa a foto atual com `cache: "no-store"`.
 7. **Conferir** o site e o painel. Só então `"apagar-antigas"`: recusa se algum registro ainda apontar para o Supabase ou se faltar arquivo no S3; senão apaga as fotos do bucket `site-media`.
+8. **Cota e limpeza dos envios (migration 0041):** aplicar a 0041 ANTES de publicar a nova `media` (sem ela todo envio dá erro). Cada barbearia pode fazer até 200 envios em 24 h e ter até 30 envios ainda sem registro; acima disso a tela recebe `upload_limit`. Limpeza diária automática (0050 + 0051): o Supabase Cron chama `media-migrate` com `{"acao":"limpar-orfaos"}` às 06:00 UTC (03:00 de Brasília), job `barberia-limpeza-midia`, e às 06:20 UTC o job `barberia-limpeza-midia-resultado` grava o resultado. Apaga do S3 só envios anotados pela `media` com mais de 24 h, sem nenhum registro, reservados antes da exclusão (nunca imagem em uso nem imagem anterior à 0041), até 100 por dia. Segredos no Vault (`sh supabase/aplicar/segredos-limpeza-midia.sh`, que confere o segredo do Keychain com o publicado). Histórico: `select * from private.media_cleanup_runs order by id desc limit 10;` (status, encontrados, apagados, falhas, erro curto). Execuções: `select status, return_message, start_time from cron.job_run_details where jobid = (select jobid from cron.job where jobname = 'barberia-limpeza-midia') order by start_time desc limit 10;`. Desligar: `select cron.unschedule('barberia-limpeza-midia');` (religar: reaplicar o bloco final da 0051). Rodar na hora: `select private.start_media_cleanup();` e, depois de 1 min, `select private.collect_media_cleanup();`.
 
 ## Chave de IA da Assistente (migration 0024 aplicada e função publicada em 2026-11-15; falta o passo 1)
 Configurações › Assistente guarda uma chave de API (OpenAI ou Anthropic) por barbearia. O uso é cobrado pelo provedor, na conta de quem criou a chave.
@@ -48,6 +49,14 @@ Só o lembrete pede resposta: termina com o bloco `REMINDER_REPLY` ("📲 Confir
 - **Reagendamento pelo WhatsApp**. A 0028 está em produção desde 2026-11-16. A atualização local mantém o NÃO seguido de SIM e inclui o ID da reserva no link da própria barbearia. A conta do cliente precisa ter acesso à reserva. Com a atualização, o reagendamento fica disponível até o horário original começar, inclusive para a equipe. A confirmação sai pela fila da Evolution com os dados da reserva. Se o envio ficar incerto, a Central registra a falha para evitar duplicação.
 - **Publicação pendente**. Publicar `outbox-worker`, aplicar `supabase/aplicar/diferenca-reagendamento.sql` pelo Supabase e publicar a aplicação e `evolution-webhook`. Manter `APP_URL` apontando para a aplicação. Testar com uma conta de cliente e um número próprio, do lembrete à confirmação do novo horário.
 - O `outbox-worker` atende a fila de **todas** as barbearias: antes de disparar à mão para teste, conferir (só leitura) que a fila só tem a reserva de teste.
+
+## Saída da barbearia e exclusão de conta (migration 0057; NÃO aplicada)
+Política de dados: `Docs/LGPD-SAIDA-EXCLUSAO.md`. Testes: `supabase/tests/sair-excluir-conta.test.ts`.
+1. **Front primeiro** (já trata `reauth_required` e mostra "ainda está sendo preparada" sem a 0057). Publicar só com autorização.
+2. **Banco:** `! supabase db query --remote --yes -f supabase/aplicar/0057.sql` (conferências só leitura no cabeçalho do arquivo). A partir daí a exclusão de conta pede login nos últimos 15 min (senha ou Google). Antes de publicar, conferir no painel do Supabase Auth: **Require current password when changing password** ligado (testar antes, num projeto de teste, que *Esqueci minha senha* continua funcionando), **Secure email change** ligado e login por telefone desligado; sem a senha atual, quem tem só uma sessão de menos de 24 h troca a senha e passa pela reautenticação. Conferência só leitura do banco (rodar com `!`): `supabase db query --remote --read-only "select has_table_privilege((select proowner from pg_proc where oid = 'public.delete_my_account()'::regprocedure), 'auth.users', 'DELETE') pode_apagar, (select json_agg(conrelid::regclass::text || ' ' || confdeltype) from pg_constraint where contype = 'f' and confrelid = 'auth.users'::regclass) fks"` (esperado: `true` e as tabelas `auth.*` com `c` = cascade).
+3. **Teste real** só com contas de teste próprias: barbeiro de teste sai de uma barbearia de teste; conferir em Equipe o card inativo e em Agendamentos a reserva futura dele.
+- **Pedidos de exclusão manuais** (dono de barbearia ou reserva futura): `select id, status, bloqueios, criado_em from public.account_deletion_requests where status = 'pendente' order by criado_em;`. Confirmar a identidade pelo e-mail da conta antes de agir. Dono: transferir a barbearia (não há fluxo no produto: decidir com o dono e o novo responsável) e então a pessoa exclui pela tela; reserva futura: a pessoa cancela e exclui pela tela. Encerrar sem excluir: `update public.account_deletion_requests set status = 'cancelado', atualizado_em = now() where id = '<id>';`. Nunca apagar `auth.users` à mão sem passar por `delete_my_account` (ela anonimiza reservas e cards antes).
+- Sessão: sair da barbearia corta o acesso na hora (o papel nunca está no token). Excluir a conta apaga sessões e refresh tokens; um access token já emitido segue válido até expirar (até 1 h), mas sem conta, vínculo ou dado: nada lê e nada grava.
 
 ## Logs e dados pessoais
 - Edge Functions não registram corpo de mensagem, telefone nem token: só `error.code`. Manter assim.
@@ -79,3 +88,30 @@ Trocar um por vez com `supabase secrets set` e conferir o worker: `WORKER_SECRET
 - [ ] Decisões pendentes acima respondidas; política de privacidade e termos revisados
 - [ ] WhatsApp / Google / cobrança ativados **ou** declarados fora do release
 - [ ] Deploy autorizado pelo responsável
+
+## Recuperação de senha (qualquer navegador ou aparelho)
+
+**Como funciona.** O e-mail *Reset password* leva a `/auth/callback?...#token_hash=…&type=recovery`. A tela confere o link com `verifyOtp({ token_hash, type: "recovery" })` num cliente à parte, só na memória da aba (`detachedAuth`), mostra **Definir nova senha**, troca a senha nessa sessão temporária e a encerra. Não usa o verificador PKCE, não entra na conta e não mexe na sessão já aberta (conta A conectada pode trocar a senha da conta B). Depois: *Entrar na minha conta* (sem login) ou *Continuar* / *Sair e entrar como …* (com login). O Google segue em PKCE.
+
+**Modelo exato do e-mail** (Authentication › Emails › *Reset password*): arquivo `supabase/email-templates/recovery.html`; assunto `Redefina sua senha | Barberia`. O link do botão tem de ser exatamente:
+
+```
+{{ .RedirectTo }}#token_hash={{ .TokenHash }}&type=recovery
+```
+
+Nunca `{{ .ConfirmationURL }}`: com ele o link vira `?code=…` (PKCE) e só abre no navegador que pediu — é o que gerava o aviso "Abra o link no mesmo navegador". O link vale uma vez e expira no prazo de *Email OTP Expiration* (manter 3600 s ou menos).
+
+**Publicação (nesta ordem):**
+1. Conferir o que está em produção, sem alterar nada: `python3 supabase/email-templates/configurar_templates.py --verificar` (mostra se o modelo usa `token_hash` e se o retorno está em Redirect URLs).
+2. Se o modelo não estiver com `token_hash`: `python3 supabase/email-templates/configurar_templates.py` (faz backup em `supabase/email-templates/backup/` e pergunta antes de aplicar). Redirect URLs precisa aceitar `https://barberia-ai.vercel.app/auth/callback**`.
+3. Publicar o front (o site antigo continua funcionando com o modelo novo; a ordem inversa também não quebra).
+4. Teste manual com e-mail de verdade: pedir no Chrome e abrir no Safari; pedir no computador e abrir no celular; abrir o mesmo link duas vezes (a segunda mostra "expirou, é inválido ou já foi usado"); com outra conta conectada, conferir que ela continua conectada.
+
+**Configurações do Supabase Auth (não precisam ser afrouxadas):**
+- *Require current password when updating*: o servidor dispensa a senha atual só na sessão de recuperação (`session.IsRecovery()` no Supabase Auth). Como a senha é trocada nessa sessão, a recuperação funciona com a opção ligada. Troca de senha de dentro da conta (não existe no app hoje) teria de enviar `current_password`.
+- *Secure password change*: exige login recente (24 h); a sessão de recuperação acabou de ser criada, então passa.
+- *Secure email change*: não participa deste fluxo.
+- Conta só com Google (sem senha): a recuperação define uma senha e a conta passa a entrar também por e-mail e senha; o Google continua funcionando. O e-mail já é confirmado pelo Google e pelo próprio link.
+- Ao trocar a senha, o Supabase Auth encerra as outras sessões da conta (`LogoutAllExceptMe`): aparelhos antigos caem na próxima renovação do token (até 1 h). Quem recupera a própria conta já conectada continua conectado nesta área (a área passa a usar a sessão que sobrou); a outra área do mesmo navegador, se estiver na mesma conta, pede login de novo.
+
+Teste de navegador: `evidencias/execucao/recuperar-senha.e2e.mjs.txt` (54 verificações, 1440px e 390px, Supabase simulado).

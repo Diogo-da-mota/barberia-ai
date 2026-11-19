@@ -31,9 +31,9 @@ afterAll(async () => {
 })
 
 describe("migrations em sequência", () => {
-  it("as 36 migrations existem, numeradas sem lacunas, e aplicam sem erro", async () => {
+  it("as 51 migrations existem, numeradas sem lacunas, e aplicam sem erro", async () => {
     const files = readdirSync("supabase/migrations").filter((f) => f.endsWith(".sql")).sort()
-    expect(files.map((f) => f.slice(0, 4))).toEqual(["0001", "0002", "0003", "0004", "0005", "0006", "0007", "0008", "0009", "0010", "0011", "0012", "0013", "0014", "0015", "0016", "0017", "0018", "0019", "0020", "0021", "0022", "0023", "0024", "0025", "0026", "0027", "0028", "0029", "0030", "0031", "0032", "0033", "0034", "0035", "0036"])
+    expect(files.map((f) => f.slice(0, 4))).toEqual(["0001", "0002", "0003", "0004", "0005", "0006", "0007", "0008", "0009", "0010", "0011", "0012", "0013", "0014", "0015", "0016", "0017", "0018", "0019", "0020", "0021", "0022", "0023", "0024", "0025", "0026", "0027", "0028", "0029", "0030", "0031", "0032", "0033", "0034", "0035", "0036", "0037", "0038", "0039", "0040", "0041", "0042", "0043", "0044", "0045", "0046", "0047", "0048", "0049", "0050", "0051", "0052", "0053", "0054", "0055", "0056", "0057"])
   })
 
   it("supabase/aplicar/0005-0009.sql contém exatamente as migrations 0005 a 0009 (sem deriva)", () => {
@@ -91,6 +91,132 @@ describe("migrations em sequência", () => {
     const fn = readFileSync("supabase/migrations/0008_planos.sql", "utf8").match(/create function private\.enforce_professional_limit\(\)[\s\S]*?\n\$\$;/)![0]
     expect(diff).toContain(fn.replace("create function", "create or replace function"))
     expect(diff).toMatch(/^[\s\S]*\nbegin;[\s\S]*commit;\s*$/)
+  })
+
+  it("supabase/aplicar/0057.sql contém exatamente a migration 0057 (sem deriva), em uma transação", () => {
+    const aplicar = readFileSync("supabase/aplicar/0057.sql", "utf8")
+    expect(aplicar).toContain(readFileSync("supabase/migrations/0057_saida_exclusao_equipe.sql", "utf8").trim())
+    expect(aplicar).toMatch(/^[\s\S]*\nbegin;[\s\S]*commit;\s*$/)
+  })
+
+  it("supabase/aplicar/0056.sql contém exatamente a migration 0056 (sem deriva), em uma transação", () => {
+    const aplicar = readFileSync("supabase/aplicar/0056.sql", "utf8")
+    expect(aplicar).toContain(readFileSync("supabase/migrations/0056_excluir_conta.sql", "utf8").trim())
+    expect(aplicar).toMatch(/^[\s\S]*\nbegin;[\s\S]*commit;\s*$/)
+  })
+
+  it("supabase/aplicar/0055.sql contém exatamente a migration 0055 (sem deriva), em uma transação", () => {
+    const aplicar = readFileSync("supabase/aplicar/0055.sql", "utf8")
+    expect(aplicar).toContain(readFileSync("supabase/migrations/0055_alerta_ponte.sql", "utf8").trim())
+    expect(aplicar).toMatch(/^[\s\S]*\nbegin;[\s\S]*commit;\s*$/)
+  })
+
+  it("supabase/aplicar/0054.sql contém exatamente a migration 0054 (sem deriva), em uma transação", () => {
+    const aplicar = readFileSync("supabase/aplicar/0054.sql", "utf8")
+    expect(aplicar).toContain(readFileSync("supabase/migrations/0054_alerta_seguranca.sql", "utf8").trim())
+    expect(aplicar).toMatch(/^[\s\S]*\nbegin;[\s\S]*commit;\s*$/)
+  })
+
+  it("supabase/aplicar/0053.sql contém exatamente a migration 0053 (sem deriva), em uma transação", () => {
+    const aplicar = readFileSync("supabase/aplicar/0053.sql", "utf8")
+    expect(aplicar).toContain(readFileSync("supabase/migrations/0053_slug_limite.sql", "utf8").trim())
+    expect(aplicar).toMatch(/^[\s\S]*\nbegin;[\s\S]*commit;\s*$/)
+  })
+
+  it("supabase/aplicar/0052.sql contém exatamente a migration 0052 (sem deriva), em uma transação", () => {
+    const aplicar = readFileSync("supabase/aplicar/0052.sql", "utf8")
+    expect(aplicar).toContain(readFileSync("supabase/migrations/0052_storage_envio_direto.sql", "utf8").trim())
+    expect(aplicar).toMatch(/^[\s\S]*\nbegin;[\s\S]*commit;\s*$/)
+  })
+
+  it("supabase/aplicar/0051.sql contém exatamente a migration 0051 (sem deriva), em uma transação", () => {
+    const aplicar = readFileSync("supabase/aplicar/0051.sql", "utf8")
+    expect(aplicar).toContain(readFileSync("supabase/migrations/0051_midia_limpeza_agendada.sql", "utf8").trim())
+    expect(aplicar).toMatch(/^[\s\S]*\nbegin;[\s\S]*commit;\s*$/)
+  })
+
+  it("supabase/aplicar/0050.sql contém exatamente a migration 0050 (sem deriva), em uma transação", () => {
+    const aplicar = readFileSync("supabase/aplicar/0050.sql", "utf8")
+    expect(aplicar).toContain(readFileSync("supabase/migrations/0050_midia_limpeza_reserva.sql", "utf8").trim())
+    expect(aplicar).toMatch(/^[\s\S]*\nbegin;[\s\S]*commit;\s*$/)
+  })
+
+  it("supabase/aplicar/0049.sql contém exatamente a migration 0049 (sem deriva), em uma transação", () => {
+    const aplicar = readFileSync("supabase/aplicar/0049.sql", "utf8")
+    expect(aplicar).toContain(readFileSync("supabase/migrations/0049_limite_reservas_equipe_ativa.sql", "utf8").trim())
+    expect(aplicar).toMatch(/^[\s\S]*\nbegin;[\s\S]*commit;\s*$/)
+  })
+
+  it("supabase/aplicar/0048.sql contém exatamente a migration 0048 (sem deriva), em uma transação", () => {
+    const aplicar = readFileSync("supabase/aplicar/0048.sql", "utf8")
+    expect(aplicar).toContain(readFileSync("supabase/migrations/0048_reserva_manual_sobrecarga_antiga.sql", "utf8").trim())
+    expect(aplicar).toMatch(/^[\s\S]*\nbegin;[\s\S]*commit;\s*$/)
+  })
+
+  it("supabase/aplicar/0047.sql contém exatamente a migration 0047 (sem deriva), em uma transação", () => {
+    const aplicar = readFileSync("supabase/aplicar/0047.sql", "utf8")
+    expect(aplicar).toContain(readFileSync("supabase/migrations/0047_agenda_vinculo_dono.sql", "utf8").trim())
+    expect(aplicar).toMatch(/^[\s\S]*\nbegin;[\s\S]*commit;\s*$/)
+  })
+
+  it("supabase/aplicar/0046.sql contém exatamente a migration 0046 (sem deriva), em uma transação", () => {
+    const aplicar = readFileSync("supabase/aplicar/0046.sql", "utf8")
+    expect(aplicar).toContain(readFileSync("supabase/migrations/0046_limite_respostas_por_barbearia.sql", "utf8").trim())
+    expect(aplicar).toMatch(/^[\s\S]*\nbegin;[\s\S]*commit;\s*$/)
+  })
+
+  it("supabase/aplicar/0045.sql contém exatamente a migration 0045 (sem deriva), em uma transação", () => {
+    const aplicar = readFileSync("supabase/aplicar/0045.sql", "utf8")
+    expect(aplicar).toContain(readFileSync("supabase/migrations/0045_reserva_manual_cota_fila_justa.sql", "utf8").trim())
+    expect(aplicar).toMatch(/^[\s\S]*\nbegin;[\s\S]*commit;\s*$/)
+  })
+
+  it("supabase/aplicar/0044.sql contém exatamente a migration 0044 (sem deriva), em uma transação", () => {
+    const aplicar = readFileSync("supabase/aplicar/0044.sql", "utf8")
+    expect(aplicar).toContain(readFileSync("supabase/migrations/0044_fila_teto_tentativas.sql", "utf8").trim())
+    expect(aplicar).toMatch(/^[\s\S]*\nbegin;[\s\S]*commit;\s*$/)
+  })
+
+  it("supabase/aplicar/0043.sql contém exatamente a migration 0043 (sem deriva), em uma transação", () => {
+    const aplicar = readFileSync("supabase/aplicar/0043.sql", "utf8")
+    expect(aplicar).toContain(readFileSync("supabase/migrations/0043_agenda_desvincular_conta.sql", "utf8").trim())
+    expect(aplicar).toMatch(/^[\s\S]*\nbegin;[\s\S]*commit;\s*$/)
+  })
+
+  it("supabase/aplicar/0042.sql contém exatamente a migration 0042 (sem deriva), em uma transação", () => {
+    const aplicar = readFileSync("supabase/aplicar/0042.sql", "utf8")
+    expect(aplicar).toContain(readFileSync("supabase/migrations/0042_estorno_repasse_atomico.sql", "utf8").trim())
+    expect(aplicar).toMatch(/^[\s\S]*\nbegin;[\s\S]*commit;\s*$/)
+  })
+
+  it("supabase/aplicar/0041.sql contém exatamente a migration 0041 (sem deriva), em uma transação", () => {
+    const aplicar = readFileSync("supabase/aplicar/0041.sql", "utf8")
+    expect(aplicar).toContain(readFileSync("supabase/migrations/0041_midia_cota.sql", "utf8").trim())
+    expect(aplicar).toMatch(/^[\s\S]*\nbegin;[\s\S]*commit;\s*$/)
+  })
+
+  it("supabase/aplicar/0040.sql contém exatamente a migration 0040 (sem deriva), em uma transação", () => {
+    const aplicar = readFileSync("supabase/aplicar/0040.sql", "utf8")
+    expect(aplicar).toContain(readFileSync("supabase/migrations/0040_slug_registro.sql", "utf8").trim())
+    expect(aplicar).toMatch(/^[\s\S]*\nbegin;[\s\S]*commit;\s*$/)
+  })
+
+  it("supabase/aplicar/0039.sql contém exatamente a migration 0039 (sem deriva), em uma transação", () => {
+    const aplicar = readFileSync("supabase/aplicar/0039.sql", "utf8")
+    expect(aplicar).toContain(readFileSync("supabase/migrations/0039_whatsapp_remetente_brasil.sql", "utf8").trim())
+    expect(aplicar).toMatch(/^[\s\S]*\nbegin;[\s\S]*commit;\s*$/)
+  })
+
+  it("supabase/aplicar/0038.sql contém exatamente a migration 0038 (sem deriva), em uma transação", () => {
+    const aplicar = readFileSync("supabase/aplicar/0038.sql", "utf8")
+    expect(aplicar).toContain(readFileSync("supabase/migrations/0038_desligamento_equipe.sql", "utf8").trim())
+    expect(aplicar).toMatch(/^[\s\S]*\nbegin;[\s\S]*commit;\s*$/)
+  })
+
+  it("supabase/aplicar/0037.sql contém exatamente a migration 0037 (sem deriva), em uma transação", () => {
+    const aplicar = readFileSync("supabase/aplicar/0037.sql", "utf8")
+    expect(aplicar).toContain(readFileSync("supabase/migrations/0037_convite_vinculo_email.sql", "utf8").trim())
+    expect(aplicar).toMatch(/^[\s\S]*\nbegin;[\s\S]*commit;\s*$/)
   })
 
   it("supabase/aplicar/0036.sql contém exatamente a migration 0036 (sem deriva), em uma transação", () => {

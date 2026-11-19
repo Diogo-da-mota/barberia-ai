@@ -56,6 +56,28 @@ export function rememberNext(path: unknown) {
   }
 }
 
+const EMAIL_KEY = "barberia:auth-email"
+
+/** E-mail que ESTE navegador pediu (cadastro ou nova senha), por 24 h: só o link dessa conta entra sem perguntar (AuthCallback). */
+export function rememberAuthEmail(email: string) {
+  try {
+    localStorage.setItem(EMAIL_KEY, JSON.stringify({ email: email.trim().toLowerCase(), exp: Date.now() + NEXT_TTL_MS }))
+  } catch {
+    // navegador sem armazenamento: o link pergunta antes de entrar
+  }
+}
+
+/** E-mail pedido neste navegador, ou null se não houver ou tiver vencido. */
+export function requestedAuthEmail(): string | null {
+  try {
+    const saved = JSON.parse(localStorage.getItem(EMAIL_KEY) ?? "null") as { email?: unknown; exp?: unknown } | null
+    if (saved && typeof saved.exp === "number" && saved.exp > Date.now() && typeof saved.email === "string") return saved.email
+  } catch {
+    // valor adulterado ou armazenamento indisponível
+  }
+  return null
+}
+
 /**
  * Destino guardado, uma única vez. Sem ele (outro aparelho ou navegador), usa `fallback` — a barbearia onde a conta
  * foi criada — e, por fim, o painel. Tudo passa por `safeNext`.
@@ -147,14 +169,26 @@ export function authErrorMessage(error: unknown): string {
   return "Não foi possível concluir. Tente novamente."
 }
 
-export type CallbackError = "link-expirado" | "falha" | "confirmado" | "outro-navegador"
+const DELETE_ACCOUNT_MESSAGES: Record<string, string> = {
+  has_upcoming_bookings: "Cancele suas reservas futuras antes de excluir a conta.",
+  owner_cannot_delete: "Sua conta é dona de uma barbearia. Para excluí-la, fale com o suporte.",
+  reauth_required: "Por segurança, confirme que é você antes de excluir a conta.",
+}
+
+/** Motivo da recusa ao excluir a conta (migrations 0056 e 0057), sem detalhes internos do servidor. */
+export function deleteAccountErrorMessage(error: unknown): string {
+  const message = String((error as { message?: unknown } | null)?.message ?? "")
+  return DELETE_ACCOUNT_MESSAGES[message] ?? "Não foi possível excluir a conta. Tente novamente."
+}
+
+export type CallbackError = "link-expirado" | "falha" | "confirmado" | "link-invalido"
 
 export const CALLBACK_NOTICES: Record<CallbackError, string> = {
-  "link-expirado": "Este link expirou ou já foi usado. Entre com e-mail e senha ou peça um novo em “Esqueci minha senha”.",
+  "link-expirado": "Este link expirou, é inválido ou já foi usado. Entre com e-mail e senha ou peça um novo em “Esqueci minha senha”.",
   falha: "Não foi possível concluir a autenticação. Tente novamente.",
   // E-mails enviados antes do modelo com token_hash: o código PKCE só conclui no navegador em que o fluxo começou
   confirmado: "E-mail confirmado. Agora entre com seu e-mail e senha.",
-  "outro-navegador": "Abra o link no mesmo navegador em que pediu a nova senha, ou peça um novo link aqui.",
+  "link-invalido": "Este link de nova senha não é mais válido. Peça um novo em “Esqueci minha senha”.",
 }
 
 export const SESSION_REJECTED_NOTICE = "Sua sessão expirou. Entre novamente."
@@ -163,15 +197,15 @@ export function parseAuthCallback(hash: string, search: string) {
   const params = new URLSearchParams(search)
   new URLSearchParams(hash.replace(/^#/, "")).forEach((value, key) => params.set(key, value))
 
-  const hasError = params.has("error") || params.has("error_code")
+  // Tokens do fluxo implícito no link são recusados (o app só inicia PKCE): tratados como falha, sem trocar a sessão.
+  const implicit = params.has("access_token") || params.has("refresh_token")
+  const hasError = params.has("error") || params.has("error_code") || implicit
   const error: CallbackError | null = !hasError ? null : params.get("error_code") === "otp_expired" ? "link-expirado" : "falha"
 
-  const access_token = params.get("access_token")
-  const refresh_token = params.get("refresh_token")
   return {
     error,
     isRecovery: params.get("type") === "recovery" || params.get("tipo") === "recuperar",
-    hasAuthParams: hasError || params.has("access_token") || params.has("code") || params.has("token_hash"),
+    hasAuthParams: hasError || params.has("code") || params.has("token_hash"),
     /** Área que iniciou o fluxo (colocada no link por `callbackUrl`); links antigos não têm. */
     area: toAuthArea(params.get("area")),
     tipo: params.get("tipo"),
@@ -180,6 +214,5 @@ export function parseAuthCallback(hash: string, search: string) {
     tokenHash: params.get("token_hash"),
     /** Porta de origem gravada no link (`callbackUrl`); validada pela área no /auth/callback. */
     volta: params.get("volta"),
-    tokens: access_token && refresh_token ? { access_token, refresh_token } : null,
   }
 }

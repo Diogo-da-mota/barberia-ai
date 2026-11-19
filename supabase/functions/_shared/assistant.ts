@@ -5,7 +5,7 @@
  * Para a IA não vão telefone, e-mail nem documento: só nome do cliente, serviço, profissional, horário e valores.
  */
 // snip:prod — limite de confiança: argumentos vindos da IA são validados e a barbearia nunca sai deles.
-import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import type { SupabaseClient } from 'npm:@supabase/supabase-js@2.119.0';
 import { UUID_RE } from './image.ts';
 
 export type ChatMessage = { role: 'user' | 'assistant'; content: string };

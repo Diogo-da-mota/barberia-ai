@@ -151,16 +151,23 @@ describe("authErrorMessage", () => {
 
 describe("parseAuthCallback", () => {
   it("reconhece retorno de recuperação de senha", () => {
-    expect(parseAuthCallback("#access_token=a&refresh_token=r&type=recovery", "")).toMatchObject({
+    expect(parseAuthCallback("#token_hash=h&type=recovery", "")).toMatchObject({
       error: null,
       isRecovery: true,
       hasAuthParams: true,
-      tokens: { access_token: "a", refresh_token: "r" },
+      tokenHash: "h",
     })
   })
 
+  it("tokens do fluxo implícito no link (ex.: de outra conta) viram falha e não são repassados", () => {
+    const parsed = parseAuthCallback("#access_token=a&refresh_token=r", "?area=cliente&volta=%2Fbarbearia-teste")
+    expect(parsed).toMatchObject({ error: "falha", hasAuthParams: true, code: null, tokenHash: null })
+    expect(parsed).not.toHaveProperty("tokens")
+    expect(JSON.stringify(parsed)).not.toContain("refresh_token")
+  })
+
   it("lê a área que iniciou o fluxo e o código PKCE; área desconhecida é ignorada", () => {
-    expect(parseAuthCallback("", "?area=cliente&tipo=recuperar&code=c1&sb_flow_id=f")).toMatchObject({ area: "cliente", isRecovery: true, code: "c1", tokens: null })
+    expect(parseAuthCallback("", "?area=cliente&tipo=recuperar&code=c1&sb_flow_id=f")).toMatchObject({ area: "cliente", isRecovery: true, code: "c1" })
     expect(parseAuthCallback("", "?area=admin&code=c1").area).toBeNull()
   })
 

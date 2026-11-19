@@ -1,7 +1,7 @@
 // @vitest-environment node
 //
 // Segurança — etapa 1: o webhook da Evolution compara o segredo em tempo constante e não devolve erro interno,
-// e a CSP (Report-Only) do vercel.json acompanha o index.html (hash do script inline) e os domínios usados pelo site.
+// e a CSP do vercel.json (valendo, desde 2026-11-18) acompanha o index.html (hash do script inline) e os domínios usados pelo site.
 import { createHash } from "node:crypto"
 import { readFileSync } from "node:fs"
 import { resolve } from "node:path"
@@ -43,11 +43,14 @@ describe("Google Agenda: PKCE e vínculo ao navegador", () => {
     expect(pkceCookie("", 0, "/p")).toBe("gcal_pkce=; Path=/p; Max-Age=0; HttpOnly; Secure; SameSite=Lax")
   })
 
-  it("a função envia o desafio, exige o cookie e manda o verificador na troca do código", () => {
-    const src = read("supabase/functions/google-calendar-oauth/index.ts")
+  it("a função envia o desafio, só troca o código no POST da conta dona do state (0047) e manda o verificador na troca", () => {
+    const src = read("supabase/functions/_shared/calendar-oauth.ts")
+    expect(read("supabase/functions/google-calendar-oauth/index.ts")).toContain("handleCalendarOAuth(req,")
     expect(src).toContain('code_challenge_method: "S256"')
-    expect(src).toContain("if (!verifier) return back(\"erro\")")
+    expect(src).toContain('const dono = await deps.rpc("calendar_state_owner", { p_state: state })')
+    expect(src).toContain('if (dono.error || dono.data !== user) return json({ error: "forbidden" }, 403)')
     expect(src).toContain("code_verifier: verifier")
+    expect(src).not.toContain("Set-Cookie") // o vínculo não depende mais de cookie no navegador que abriu o link
     expect(src).toContain('if (url.searchParams.has("error")) return back("erro")')
   })
 })
@@ -60,20 +63,20 @@ describe("Edge Functions chamadas pelo painel", () => {
   })
 })
 
-describe("CSP em modo Report-Only", () => {
+describe("CSP valendo (bloqueia o que não está na lista)", () => {
   type Header = { key: string; value: string }
   const vercel = JSON.parse(read("vercel.json")) as { headers: { source: string; headers: Header[] }[] }
   const all = vercel.headers.flatMap((h) => h.headers)
-  const csp = all.find((h) => h.key === "Content-Security-Policy-Report-Only")?.value ?? ""
+  const csp = all.find((h) => h.key === "Content-Security-Policy")?.value ?? ""
   const directives: Record<string, string[]> = {}
   for (const part of csp.split(";").map((d) => d.trim()).filter(Boolean)) {
     const [name, ...values] = part.split(/\s+/)
     directives[name] = values
   }
 
-  it("só observa: não existe CSP que bloqueia", () => {
+  it("bloqueia de verdade: não sobra a versão que só observa", () => {
     expect(csp).not.toBe("")
-    expect(all.some((h) => h.key === "Content-Security-Policy")).toBe(false)
+    expect(all.some((h) => h.key === "Content-Security-Policy-Report-Only")).toBe(false)
   })
 
   it("libera o script inline do index.html pelo hash (mudou o script → atualize o hash)", () => {
@@ -88,7 +91,7 @@ describe("CSP em modo Report-Only", () => {
   it("cobre os domínios usados pelo site", () => {
     const supabase = "https://hbkbdqctelembzqiptpi.supabase.co"
     expect(directives["connect-src"]).toEqual(expect.arrayContaining(["'self'", supabase, "https://viacep.com.br"]))
-    expect(directives["img-src"]).toEqual(expect.arrayContaining(["'self'", "data:", "blob:", supabase, "https://images.unsplash.com"]))
+    expect(directives["img-src"]).toEqual(expect.arrayContaining(["'self'", "data:", "blob:", supabase, "https://images.unsplash.com", "https://d23hb4irchgzuq.cloudfront.net", "https://*.googleusercontent.com"]))
     expect(directives["style-src"]).toContain("https://fonts.googleapis.com")
     expect(directives["font-src"]).toContain("https://fonts.gstatic.com")
     expect(directives["frame-ancestors"]).toEqual(["'none'"])

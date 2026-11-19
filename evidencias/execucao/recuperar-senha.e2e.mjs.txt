@@ -1,0 +1,179 @@
+// Teste de navegador da recuperação de senha em /auth/callback (Chrome real, rede do Supabase simulada).
+// Cada cenário abre um navegador NOVO (sem nada guardado), que é o mesmo que abrir o e-mail em outro navegador ou aparelho:
+// não existe verificador PKCE nem "e-mail pedido" ali. Em 1440px (computador) e 390px (celular).
+// Confere: sem login; conta B com a conta A conectada; conta A com A conectada; senha diferente; link expirado, inválido e
+// reutilizado; link do modelo antigo (code); Google (PKCE) continua entrando; nenhum token no endereço nem no armazenamento.
+// Não grava nada em produção (nenhuma chamada sai para o Supabase). Safari e celular de verdade: roteiro manual no OPERACAO.md.
+// Uso: salvar como .mjs e rodar com o servidor local no ar:  node recuperar-senha.e2e.mjs <pasta-de-capturas>
+
+import { createRequire } from "node:module"
+const require = createRequire("/Users/diogomota/.npm/_npx/b234c773f454f454/node_modules/")
+const { chromium } = require("playwright-core")
+const BASE = "http://localhost:5173", OUT = process.argv[2]
+const b64 = (o) => Buffer.from(JSON.stringify(o)).toString("base64url")
+const now = () => Math.floor(Date.now() / 1000)
+const user = (id, email) => ({ id, aud: "authenticated", role: "authenticated", email, app_metadata: { provider: "email", providers: ["email"] }, user_metadata: { full_name: email.split("@")[0] }, identities: [], created_at: new Date().toISOString() })
+const ANA = user("00000000-0000-4000-8000-0000000000a1", "ana@example.test")
+const BIA = user("00000000-0000-4000-8000-0000000000b1", "bia@example.test")
+const session = (u, method) => {
+  const jwt = `${b64({ alg: "none" })}.${b64({ sub: u.id, email: u.email, exp: now() + 3600, role: "authenticated", amr: [{ method, timestamp: now() }] })}.${u.email.split("@")[0]}-${method}`
+  return { access_token: jwt, refresh_token: `renova-${u.email.split("@")[0]}-${method}`, token_type: "bearer", expires_in: 3600, expires_at: now() + 3600, user: u }
+}
+const SESSAO_ANA = session(ANA, "password")
+const LINKS = { pkce_link_bia: BIA, pkce_link_ana: ANA }
+
+async function open({ width, height, logada = null, verificador = false }) {
+  const browser = await chromium.launch({ channel: "chrome", headless: true })
+  const context = await browser.newContext({ viewport: { width, height }, hasTouch: width < 768 })
+  const page = await context.newPage()
+  const errors = [], calls = [], usados = new Set()
+  page.on("pageerror", (e) => errors.push(e.message))
+  page.on("console", (m) => { if (m.type() === "error" && !/Failed to load resource|status of 40\d/.test(m.text())) errors.push(m.text()) })
+  await context.addInitScript(({ s, v }) => {
+    localStorage.setItem("barberia:theme", "dark")
+    if (s && !localStorage.getItem("barberia-auth-painel")) localStorage.setItem("barberia-auth-painel", JSON.stringify(s))
+    if (v && !sessionStorage.getItem("posto")) { sessionStorage.setItem("posto", "1"); localStorage.setItem("barberia-auth-painel-code-verifier", JSON.stringify("v".repeat(64))) }
+  }, { s: logada, v: verificador })
+  await context.route(/supabase\.co|cloudfront\.net/, async (route) => {
+    const req = route.request(), url = new URL(req.url()), p = url.pathname
+    const json = (b, st = 200) => route.fulfill({ status: st, contentType: "application/json", body: JSON.stringify(b) })
+    const body = () => { try { return JSON.parse(req.postData() ?? "{}") } catch { return {} } }
+    const bearer = (req.headers()["authorization"] ?? "").replace("Bearer ", "")
+    if (!url.hostname.includes("supabase")) return route.fulfill({ status: 404, body: "" })
+    if (p === "/auth/v1/verify") {
+      const b = body(), dono = LINKS[b.token_hash]
+      calls.push({ fn: "verify", type: b.type, token: b.token_hash })
+      // O servidor aceita cada link uma única vez; expirado, inválido e reutilizado respondem igual
+      if (!dono || b.type !== "recovery" || usados.has(b.token_hash)) return json({ code: 403, error_code: "otp_expired", msg: "Email link is invalid or has expired" }, 403)
+      usados.add(b.token_hash)
+      return json(session(dono, "recovery"))
+    }
+    if (p === "/auth/v1/user" && req.method() === "PUT") { calls.push({ fn: "trocar-senha", bearer, body: body() }); return json(bearer.endsWith("bia-recovery") ? BIA : ANA) }
+    if (p === "/auth/v1/user") return json(bearer.includes("bia") ? BIA : ANA)
+    if (p === "/auth/v1/logout") { calls.push({ fn: "logout", bearer, scope: url.searchParams.get("scope") }); return route.fulfill({ status: 204, body: "" }) }
+    if (p === "/auth/v1/token") { const b = body(); calls.push({ fn: `token:${url.searchParams.get("grant_type")}`, code: b.auth_code, verifier: Boolean(b.code_verifier) }); return json(session(ANA, "oauth")) }
+    if (p.startsWith("/auth/")) { calls.push({ fn: p }); return json({}) }
+    return json(req.headers()["accept"]?.includes("vnd.pgrst.object") ? null : [])
+  })
+  const guardado = () => page.evaluate(() => ({ painel: localStorage.getItem("barberia-auth-painel"), cliente: localStorage.getItem("barberia-auth-cliente"), tudo: JSON.stringify({ ...localStorage, ...sessionStorage }) }))
+  return { browser, page, errors, calls, guardado }
+}
+const shot = (page, name) => OUT ? page.screenshot({ path: `${OUT}/${name}.png` }) : null
+let ok = 0, bad = 0
+const check = (name, pass, detail = "") => { pass ? ok++ : bad++; console.log(`${pass ? "PASS" : "FAIL"}  ${name}${detail ? `  (${detail})` : ""}`) }
+const overflow = (page) => page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1)
+const link = (area, token, volta = "") => `${BASE}/auth/callback?area=${area}&tipo=recuperar${volta}#token_hash=${token}&type=recovery`
+const SUCESSO = "Senha alterada com sucesso. Agora você pode entrar na sua conta."
+async function novaSenha(page, senha, confirmacao = senha) {
+  await page.getByLabel("Nova senha", { exact: true }).fill(senha)
+  await page.getByLabel("Confirmar nova senha").fill(confirmacao)
+  await page.getByRole("button", { name: "Salvar nova senha" }).click()
+}
+
+for (const [w, h] of [[1440, 900], [390, 844]]) {
+  const tag = `${w}px`
+
+  // ---- 1. sem login, em outro navegador/aparelho: link da Bia pedido na barbearia ----
+  let t = await open({ width: w, height: h })
+  await t.page.goto(link("cliente", "pkce_link_bia", "&volta=%2Fbarbearia-central%2Fminhas-reservas"), { waitUntil: "load" })
+  await t.page.getByRole("heading", { name: "Definir nova senha" }).waitFor({ timeout: 8000 })
+  check(`${tag} sem login: abre "Definir nova senha" sem o navegador de origem`, true)
+  check(`${tag} sem login: token fora do endereço e do histórico`, !/token_hash|pkce_/.test(t.page.url()), t.page.url().replace(BASE, ""))
+  check(`${tag} sem login: campos e botão pedidos`, await t.page.getByLabel("Nova senha", { exact: true }).isVisible() && await t.page.getByLabel("Confirmar nova senha").isVisible() && await t.page.getByRole("button", { name: "Salvar nova senha" }).isVisible())
+  check(`${tag} sem login: sem rolagem lateral`, !(await overflow(t.page)))
+  await shot(t.page, `recuperar-${w}-1-formulario`)
+  await novaSenha(t.page, "segredo-novo-1", "segredo-diferente")
+  await t.page.getByText("As senhas não são iguais.").waitFor({ timeout: 4000 })
+  check(`${tag} confirmação diferente: avisa e não envia`, !t.calls.some((c) => c.fn === "trocar-senha"))
+  await novaSenha(t.page, "segredo-novo-1")
+  await t.page.getByText(SUCESSO).waitFor({ timeout: 6000 })
+  await shot(t.page, `recuperar-${w}-2-sucesso-sem-login`)
+  let troca = t.calls.find((c) => c.fn === "trocar-senha"), g = await t.guardado()
+  check(`${tag} sem login: senha trocada na sessão de recuperação da Bia, sem senha antiga`, troca?.bearer.endsWith("bia-recovery") && troca.body.password === "segredo-novo-1" && !("current_password" in troca.body))
+  check(`${tag} sem login: sessão temporária encerrada (logout local)`, t.calls.some((c) => c.fn === "logout" && c.scope === "local" && c.bearer.endsWith("bia-recovery")))
+  check(`${tag} sem login: ninguém foi conectado e nenhum token ficou guardado`, !g.painel && !g.cliente && !/bia-recovery|renova-bia/.test(g.tudo))
+  await t.page.getByRole("button", { name: "Entrar na minha conta" }).click()
+  await t.page.waitForURL(/\/barbearia-central\/entrar/, { timeout: 6000 })
+  check(`${tag} sem login: "Entrar na minha conta" leva ao login da barbearia`, true)
+  check(`${tag} sem login: sem erros no console`, t.errors.length === 0, t.errors.join(" | ").slice(0, 200))
+
+  // ---- 2. link reutilizado (o mesmo servidor já consumiu), expirado e inválido ----
+  await t.page.goto(link("painel", "pkce_link_bia"), { waitUntil: "load" })
+  await t.page.waitForURL(/\/painel\/entrar\?erro=link-expirado/, { timeout: 8000 })
+  let aviso = await t.page.getByRole("dialog").innerText()
+  check(`${tag} link reutilizado: volta ao login com aviso próprio`, aviso.includes("Este link expirou, é inválido ou já foi usado.") && !aviso.includes("mesmo navegador"))
+  await shot(t.page, `recuperar-${w}-3-link-usado`)
+  await t.page.goto(link("painel", "qualquer-coisa"), { waitUntil: "load" })
+  await t.page.waitForURL(/\/painel\/entrar\?erro=link-expirado/, { timeout: 8000 })
+  check(`${tag} link inválido ou expirado: mesmo aviso, sem trocar senha`, t.calls.filter((c) => c.fn === "trocar-senha").length === 1)
+  await t.browser.close()
+
+  // ---- 3. link do modelo antigo (code) aberto em outro navegador ----
+  t = await open({ width: w, height: h })
+  await t.page.goto(`${BASE}/auth/callback?area=painel&tipo=recuperar&code=codigo-antigo`, { waitUntil: "load" })
+  await t.page.waitForURL(/\/painel\/entrar\?erro=link-invalido/, { timeout: 8000 })
+  aviso = await t.page.getByRole("dialog").innerText()
+  check(`${tag} modelo antigo em outro navegador: pede link novo, sem "mesmo navegador"`, aviso.includes("Este link de nova senha não é mais válido.") && !aviso.includes("mesmo navegador"))
+  await t.browser.close()
+
+  // ---- 4. Ana conectada no painel abre a recuperação da Bia ----
+  t = await open({ width: w, height: h, logada: SESSAO_ANA })
+  await t.page.goto(link("painel", "pkce_link_bia"), { waitUntil: "load" })
+  await t.page.getByRole("heading", { name: "Definir nova senha" }).waitFor({ timeout: 8000 })
+  check(`${tag} B com A conectada: não pergunta "Trocar de conta?"`, !(await t.page.getByRole("heading", { name: "Trocar de conta?" }).isVisible().catch(() => false)))
+  await novaSenha(t.page, "segredo-da-bia-2")
+  await t.page.getByText(SUCESSO).waitFor({ timeout: 6000 })
+  await shot(t.page, `recuperar-${w}-4-sucesso-outra-conta`)
+  troca = t.calls.find((c) => c.fn === "trocar-senha"); g = await t.guardado()
+  check(`${tag} B com A conectada: a senha trocada é a da Bia`, troca?.bearer.endsWith("bia-recovery") && t.calls.filter((c) => c.fn === "trocar-senha").length === 1)
+  check(`${tag} B com A conectada: a sessão guardada continua a da Ana`, JSON.parse(g.painel).access_token === SESSAO_ANA.access_token && !/bia-recovery|renova-bia/.test(g.tudo))
+  check(`${tag} B com A conectada: a Ana não foi desconectada`, !t.calls.some((c) => c.fn === "logout" && !c.bearer.endsWith("bia-recovery")))
+  check(`${tag} B com A conectada: a tela diz quem segue conectada e oferece a escolha`, await t.page.getByText("ana@example.test").first().isVisible() && await t.page.getByRole("button", { name: "Sair e entrar como bia@example.test" }).isVisible())
+  check(`${tag} B com A conectada: sem rolagem lateral`, !(await overflow(t.page)))
+  await t.page.getByRole("button", { name: "Continuar como ana@example.test" }).click()
+  await t.page.waitForURL(/\/dashboard/, { timeout: 8000 })
+  g = await t.guardado()
+  check(`${tag} B com A conectada: "Continuar" abre o painel ainda como Ana`, JSON.parse(g.painel).user.email === "ana@example.test")
+  check(`${tag} B com A conectada: sem erros no console`, t.errors.length === 0, t.errors.join(" | ").slice(0, 200))
+  await t.browser.close()
+
+  // ---- 5. Ana conectada escolhe entrar na conta recuperada ----
+  t = await open({ width: w, height: h, logada: SESSAO_ANA })
+  await t.page.goto(link("painel", "pkce_link_bia"), { waitUntil: "load" })
+  await t.page.getByRole("heading", { name: "Definir nova senha" }).waitFor({ timeout: 8000 })
+  await novaSenha(t.page, "segredo-da-bia-3")
+  await t.page.getByRole("button", { name: "Sair e entrar como bia@example.test" }).click()
+  await t.page.waitForURL(/\/painel\/entrar/, { timeout: 8000 })
+  g = await t.guardado()
+  check(`${tag} escolha explícita: sai da Ana e abre o login, sem entrar sozinho na Bia`, !g.painel && !/bia-recovery/.test(g.tudo))
+  await t.browser.close()
+
+  // ---- 6. Ana conectada recupera a própria conta ----
+  t = await open({ width: w, height: h, logada: SESSAO_ANA })
+  await t.page.goto(link("painel", "pkce_link_ana"), { waitUntil: "load" })
+  await t.page.getByRole("heading", { name: "Definir nova senha" }).waitFor({ timeout: 8000 })
+  await novaSenha(t.page, "segredo-da-ana-4")
+  await t.page.getByText(SUCESSO).waitFor({ timeout: 6000 })
+  await shot(t.page, `recuperar-${w}-5-sucesso-mesma-conta`)
+  g = await t.guardado()
+  // O servidor encerra as outras sessões da conta ao trocar a senha: a área segue como Ana com a sessão que sobrou
+  check(`${tag} A com A conectada: senha trocada e a Ana continua conectada (sessão válida após a troca)`, t.calls.find((c) => c.fn === "trocar-senha")?.bearer.endsWith("ana-recovery") && JSON.parse(g.painel).user.email === "ana@example.test" && JSON.parse(g.painel).access_token.endsWith("ana-recovery") && !t.calls.some((c) => c.fn === "logout"))
+  check(`${tag} A com A conectada: sem oferta de troca de conta`, !(await t.page.getByRole("button", { name: /Sair e entrar/ }).isVisible().catch(() => false)))
+  await t.page.getByRole("button", { name: "Continuar", exact: true }).click()
+  await t.page.waitForURL(/\/dashboard/, { timeout: 8000 })
+  check(`${tag} A com A conectada: segue para o painel`, true)
+  await t.browser.close()
+
+  // ---- 7. Google (PKCE) continua entrando no navegador que iniciou ----
+  t = await open({ width: w, height: h, verificador: true })
+  await t.page.goto(`${BASE}/auth/callback?area=painel&code=codigo-google`, { waitUntil: "load" })
+  await t.page.waitForURL(/\/dashboard/, { timeout: 8000 })
+  g = await t.guardado()
+  const pkce = t.calls.find((c) => c.fn === "token:pkce")
+  check(`${tag} Google: o código é trocado com o verificador PKCE e a conta entra`, pkce?.code === "codigo-google" && pkce.verifier && JSON.parse(g.painel).user.email === "ana@example.test")
+  check(`${tag} Google: nenhum verify de e-mail foi usado`, !t.calls.some((c) => c.fn === "verify"))
+  await t.browser.close()
+}
+
+console.log(`\n${ok} passaram, ${bad} falharam`)
+process.exit(bad ? 1 : 0)

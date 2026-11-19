@@ -278,3 +278,85 @@ describe("renovar link e não duplicar convites (0036)", () => {
     expect((await db.query("select count(*)::int n from audit_logs where detalhes::text like '%' || $1 || '%'", [t])).rows).toEqual([{ n: 0 }])
   })
 })
+
+describe("vínculo só por e-mail confirmado (0037): nome nunca identifica a pessoa", () => {
+  const V = { carlos: U("b1"), lucas: U("b2"), marcos1: U("b3"), marcos2: U("b4"), joana: U("b5"), paula: U("b6") }
+  const manual = (nome: string) => val(ID.dono, "select save_professional($1, null, $2, true, $3)", [loja, nome, [corte]])
+  const card = async (id: string) => (await cards()).find((c) => c.id === id)!
+  const doUsuario = async (user: string) => (await cards()).filter((c) => c.profile_id === user)
+  const estado = async () => ({
+    vinculos: (await db.query("select id, profile_id, email, ativo from professionals where profile_id is not null order by id")).rows,
+    reservas: (await db.query("select id, professional_id, customer_id, status from bookings order by id")).rows,
+    membros: (await db.query("select barbershop_id, profile_id, papel from memberships order by barbershop_id, profile_id")).rows,
+  })
+  let pedroManual = "", lucasManual = "", marcosManual = "", joanaManual = "", paulaManual = "", reservaPedro = ""
+  let antes: Awaited<ReturnType<typeof estado>>
+
+  beforeAll(async () => {
+    await db.query(`insert into auth.users (id, email, email_confirmed_at, raw_user_meta_data) values
+      ($1, 'carlos@example.test', now(), '{"full_name":"Carlos"}'), ($2, 'lucas.a@example.test', now(), '{"full_name":"Lucas Lima"}'),
+      ($3, 'marcos1@example.test', now(), '{"full_name":"Marcos Dias"}'), ($4, 'marcos2@example.test', now(), '{"full_name":"Marcos Dias"}'),
+      ($5, 'joana@example.test', null, '{"full_name":"Joana Reis"}'), ($6, 'paula.m@example.test', now(), '{"full_name":"Paula Melo"}')`,
+      [V.carlos, V.lucas, V.marcos1, V.marcos2, V.joana, V.paula])
+    // Cadastros manuais (sem conta): Pedro e Lucas sem e-mail; Marcos, Joana e Paula com o e-mail gravado pela gestão.
+    pedroManual = await manual("Pedro Alves")
+    lucasManual = await manual("Lucas Lima")
+    marcosManual = await manual("Marcos Dias")
+    joanaManual = await manual("Joana Reis")
+    paulaManual = await manual("Paula Melo")
+    await db.query("update professionals set email = 'marcos1@example.test' where id = $1", [marcosManual])
+    await db.query("update professionals set email = 'joana@example.test' where id = $1", [joanaManual])
+    await db.query("update professionals set email = 'Paula.M@Example.TEST' where id = $1", [paulaManual])
+    // Reserva já existente do Pedro (cliente com nome e WhatsApp).
+    await rows(ID.dono, "select save_working_hours($1, $2)", [pedroManual, JSON.stringify([0, 1, 2, 3, 4, 5, 6].map((dow) => ({ dow, inicio_min: 540, fim_min: 1080 })))])
+    const dia = await val(null, "select ((now() at time zone 'America/Sao_Paulo')::date + 2)::text")
+    const slot = (await rows(null, "select slot_inicio from get_availability($1, $2, $3, $4) order by 1", [loja, corte, pedroManual, dia]))[0].slot_inicio
+    reservaPedro = await val(ID.cliente, "select create_booking($1, $2, $3, $4, 'Maria', '64992750733', false, false, null)", [loja, corte, pedroManual, slot])
+
+    antes = await estado()
+    await db.exec(readFileSync("supabase/migrations/0037_convite_vinculo_email.sql", "utf8"))
+  })
+
+  it("aplicar a 0037 não muda vínculos, reservas nem papéis já existentes (inclusive o vínculo feito pelo nome antes da correção)", async () => {
+    expect(await estado()).toEqual(antes)
+    expect((await card(anaManual)).profile_id).toBe(ID.ana) // ligado pelo nome na 0033: continua; a revisão é da gestão
+    expect((await card(joaoManual)).profile_id).toBe(ID.joao)
+  })
+
+  it("convidado que troca o próprio nome para o de um cadastro sem e-mail ganha card próprio e não vê as reservas daquele card", async () => {
+    expect(await val(V.carlos, "update profiles set nome = 'Pedro Alves' where id = auth.uid() returning nome")).toBe("Pedro Alves")
+    await accept(V.carlos, await invite("carlos@example.test", "barbeiro"))
+    expect(await card(pedroManual)).toMatchObject({ nome: "Pedro Alves", profile_id: null, email: null })
+    expect(await doUsuario(V.carlos)).toEqual([expect.objectContaining({ nome: "Pedro Alves · carlos", email: "carlos@example.test" })])
+    expect(await rows(V.carlos, "select id from bookings")).toEqual([])
+    expect((await rows(ID.dono, "select professional_id from bookings where id = $1", [reservaPedro]))[0].professional_id).toBe(pedroManual)
+  })
+
+  it("homônimo (mesmo nome do cadastro, sem e-mail no card): card próprio; o cadastro manual fica intacto", async () => {
+    await accept(V.lucas, await invite("lucas.a@example.test", "barbeiro"))
+    expect((await card(lucasManual)).profile_id).toBeNull()
+    expect(await doUsuario(V.lucas)).toEqual([expect.objectContaining({ nome: "Lucas Lima · lucas.a", email: "lucas.a@example.test" })])
+  })
+
+  it("duas pessoas com o mesmo nome e e-mails diferentes: só a do e-mail gravado no card assume o cadastro", async () => {
+    await accept(V.marcos2, await invite("marcos2@example.test", "barbeiro"))
+    expect((await card(marcosManual)).profile_id).toBeNull()
+    expect(await doUsuario(V.marcos2)).toEqual([expect.objectContaining({ nome: "Marcos Dias · marcos2" })])
+    const total = (await cards()).length
+    await accept(V.marcos1, await invite("marcos1@example.test", "barbeiro"))
+    expect((await card(marcosManual)).profile_id).toBe(V.marcos1)
+    expect((await cards()).length).toBe(total) // ligou o cadastro existente, sem duplicar
+  })
+
+  it("e-mail do card com maiúsculas casa com o e-mail confirmado; e-mail não confirmado nunca assume cadastro, nem chamando a função direto", async () => {
+    await accept(V.paula, await invite("paula.m@example.test", "barbeiro"))
+    expect((await card(paulaManual)).profile_id).toBe(V.paula)
+    const novo = (await db.query<{ id: string }>("select private.ensure_team_professional($1, $2) id", [loja, V.joana])).rows[0].id
+    expect(novo).not.toBe(joanaManual)
+    expect((await card(joanaManual)).profile_id).toBeNull()
+  })
+
+  it("a função de vínculo continua fora do alcance da API", async () => {
+    for (const u of [V.carlos, ID.dono, null]) await expect(rows(u, "select private.ensure_team_professional($1, $2)", [loja, V.carlos])).rejects.toThrow(/permission denied/)
+  })
+})

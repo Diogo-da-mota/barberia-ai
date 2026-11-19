@@ -1,9 +1,12 @@
+import { useEffect } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { isMissingSchema } from "@/features/booking/domain"
 import { Button } from "@/ui/button"
 import { Panel, StatusBadge } from "@/ui/finance"
 import { toast } from "@/ui/sonner"
-import { calendarEnabled, fetchConnection, fetchMyProfessional, startLink, unlink } from "./api"
+import { calendarEnabled, fetchConnection, fetchMyProfessional, finishLink, readCalendarReturn, startLink, unlink } from "./api"
+
+const concluidos = new Set<string>()
 
 /** Cartão de quem é profissional da barbearia: vincula o próprio Google Calendar, com consentimento próprio. */
 export function CalendarCard({ shopId }: { shopId: string }) {
@@ -17,6 +20,16 @@ export function CalendarCard({ shopId }: { shopId: string }) {
     onSuccess: (url) => { window.location.assign(url) },
     onError: () => toast.error("Não foi possível iniciar o vínculo. Tente novamente."),
   })
+  // Retorno do Google: conclui o vínculo aqui, com a sessão e o verificador deste navegador; o código sai do endereço na hora.
+  useEffect(() => {
+    const retorno = readCalendarReturn(window.location.hash)
+    if (!retorno || concluidos.has(retorno.code)) return
+    concluidos.add(retorno.code)
+    window.history.replaceState(window.history.state, "", `${window.location.pathname}${window.location.search}`)
+    finishLink(retorno.code, retorno.state)
+      .then(async () => { await queryClient.invalidateQueries({ queryKey: ["calendar-connection"] }); toast.success("Google Calendar vinculado.") })
+      .catch(() => toast.error("Não foi possível concluir o vínculo. Comece de novo por este navegador."))
+  }, [queryClient])
   const remove = useMutation({
     mutationFn: () => unlink(professionalId!),
     onSuccess: async () => { await queryClient.invalidateQueries({ queryKey: ["calendar-connection", professionalId] }); toast.success("Calendário desvinculado. Eventos já criados no Google permanecem.") },

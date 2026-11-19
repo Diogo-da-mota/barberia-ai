@@ -20,6 +20,23 @@ export function toE164(phone: string): string {
   return digits.length === 10 || digits.length === 11 ? `55${digits}` : digits
 }
 
+/**
+ * Nome do cliente como entra na mensagem que sai do WhatsApp da barbearia: só letras, espaços, apóstrofo e hífen. O nome é
+ * digitado por quem reserva (para qualquer número informado), então links, domínios, e-mails, números e quebras de linha
+ * saem; o resto é limitado a 60 caracteres.
+ */
+export function nomeCliente(nome: string | undefined): string {
+  return (nome ?? "")
+    .normalize("NFC")
+    .replace(/\S*(?:[a-z][a-z0-9+.-]*:\/\/|www\.|@)\S*/giu, " ")
+    .replace(/\S*[\p{L}\p{N}-]\.\p{L}{2,}\S*/gu, " ")
+    .replace(/[^\p{L}\p{M}' -]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 60)
+    .trim()
+}
+
 function when(inicio: string, fuso: string): { dia: string; hora: string } {
   const date = new Date(inicio)
   const dia = new Intl.DateTimeFormat("pt-BR", { timeZone: fuso, weekday: "long", day: "2-digit", month: "2-digit" }).format(date)
@@ -51,7 +68,8 @@ export function replyAck(motivo: string | null | undefined, barbearia: string, l
 /** Devolve o texto ao cliente, ou null quando o evento não é uma mensagem (ex.: eventos de calendário). */
 export function buildMessage(tipo: string, p: EventPayload): string | null {
   const { dia, hora } = when(p.inicio ?? new Date().toISOString(), p.fuso ?? "America/Sao_Paulo")
-  const nome = p.cliente ? `Olá, ${p.cliente.split(" ")[0]}! ` : "Olá! "
+  const primeiro = nomeCliente(p.cliente).split(" ")[0]
+  const nome = primeiro ? `Olá, ${primeiro}! ` : "Olá! "
   const onde = p.endereco ? `\nEndereço: ${p.endereco}` : ""
   const detalhe = `${p.servico ?? "Atendimento"} com ${p.profissional ?? "nossa equipe"}, ${dia} às ${hora}.${onde}`
   const casa = p.barbearia ?? "a barbearia"
@@ -142,7 +160,7 @@ export function messageVariables(p: EventPayload): Record<MessageVariable, strin
   const { hora } = when(inicio.toISOString(), fuso)
   const data = new Intl.DateTimeFormat("pt-BR", { timeZone: fuso, day: "2-digit", month: "2-digit" }).format(inicio)
   const diaSemana = new Intl.DateTimeFormat("pt-BR", { timeZone: fuso, weekday: "long" }).format(inicio)
-  const cliente = (p.cliente ?? "").trim()
+  const cliente = nomeCliente(p.cliente)
   return {
     nome: cliente.split(/\s+/)[0] || "cliente",
     cliente: cliente || "cliente",

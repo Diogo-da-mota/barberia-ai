@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest"
-import { ACCENTS, MAX_GALLERY, MEDIA_FOLDERS, accentStyle, applySeo, contrastRatio, seoFor, validateImage } from "./domain"
+import { ACCENTS, MAX_GALLERY, MEDIA_FOLDERS, accentStyle, applySeo, contrastRatio, seoFor, siteErrorMessage, validateImage } from "./domain"
 
 describe("cores permitidas do site", () => {
   it("todas mantêm contraste mínimo de 4,5:1 entre fundo de destaque e texto", () => {
@@ -61,5 +61,11 @@ describe("SEO da página pública", () => {
     expect(document.querySelector('meta[name="description"]')?.getAttribute("content")).toBe("D2")
     expect(document.querySelector('meta[property="og:title"]')?.getAttribute("content")).toBe("T2")
     expect(document.querySelector('meta[property="og:image"]')?.getAttribute("content")).toBe("https://x.test/a.png")
+  })
+})
+
+describe("mensagens de erro do endereço", () => {
+  it("limite de endereços (0053) explica o que fazer", () => {
+    expect(siteErrorMessage({ message: "slug_limit" })).toBe("Esta barbearia já usou 5 endereços. Volte a um endereço anterior.")
   })
 })

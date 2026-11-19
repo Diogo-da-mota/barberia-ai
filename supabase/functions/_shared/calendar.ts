@@ -25,8 +25,9 @@ export function buildGoogleEvent(p: CalendarPayload) {
   }
 }
 
-// PKCE (RFC 7636, S256) do vínculo com o Google Agenda. O verificador fica num cookie HttpOnly do navegador que
-// iniciou o fluxo: um link de consentimento montado por outra pessoa não completa o vínculo.
+// PKCE (RFC 7636, S256) do vínculo com o Google Agenda. Desde a migration 0047 o verificador fica no app (navegador de quem
+// iniciou) e o vínculo só é concluído por POST com a sessão da conta dona do profissional (_shared/calendar-oauth.ts); os
+// utilitários de cookie abaixo não são mais usados pela função e ficam só para os testes antigos.
 export const PKCE_COOKIE = "gcal_pkce"
 
 const base64url = (bytes: Uint8Array) =>

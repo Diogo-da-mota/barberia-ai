@@ -1,5 +1,8 @@
+import { useCallback, useState } from "react"
 import { Link, useNavigate } from "react-router-dom"
-import { CalendarCheck, LogOut, Menu, Scissors, UserRound } from "lucide-react"
+import { CalendarCheck, LogOut, Menu, Scissors, Trash2, UserRound } from "lucide-react"
+import { DeleteAccountDialog } from "@/features/auth/components/DeleteAccountDialog"
+import { useDeleteAccountReturn } from "@/features/auth/hooks/useDeleteAccountReturn"
 import { useAuth } from "@/features/auth/hooks/useAuth"
 import { publicMediaUrl } from "@/features/site/api"
 import { shopBookingsPath, shopPath, shopSectionPath, type ShopSection } from "@/lib/shopPaths"
@@ -28,6 +31,16 @@ export function ClientHeader({ slug, shop, onLogin }: { slug: string; shop?: { n
   const signOut = async () => {
     navigate(shopPath(slug), { replace: true })
     try { await logout() } catch { toast.error("Não foi possível sair. Tente novamente.") }
+  }
+
+  // Exclusão da própria conta (LGPD): o pop-up confirma (login recente), apaga no servidor e encerra as sessões; aqui volta
+  // para a página da barbearia. Voltando da confirmação pelo Google com a mesma conta, o pop-up reabre.
+  const [excluir, setExcluir] = useState(false)
+  useDeleteAccountReturn(session?.user.id, useCallback(() => setExcluir(true), []))
+  const contaExcluida = () => {
+    setExcluir(false)
+    navigate(shopPath(slug), { replace: true })
+    toast.success("Sua conta foi excluída.")
   }
 
   return (
@@ -78,9 +91,11 @@ export function ClientHeader({ slug, shop, onLogin }: { slug: string; shop?: { n
                   <p className="truncate text-[13px] text-muted-foreground">{session.user.email}</p>
                 </div>
                 <Button variant="ghost" className="mt-2 h-11 w-full justify-start gap-2" onClick={signOut}><LogOut aria-hidden="true" className="h-4 w-4" />Sair</Button>
+                <Button variant="ghost" className="h-11 w-full justify-start gap-2 text-destructive hover:text-destructive" onClick={() => setExcluir(true)}><Trash2 aria-hidden="true" className="h-4 w-4" />Excluir minha conta</Button>
               </PopoverContent>
             </Popover>
           )}
+          <DeleteAccountDialog open={excluir} onClose={() => setExcluir(false)} onDeleted={contaExcluida} />
         </nav>
       </div>
     </header>

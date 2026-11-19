@@ -9,7 +9,7 @@ import { btree_gist } from "@electric-sql/pglite/contrib/btree_gist"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 
 const U = (n: string) => `00000000-0000-4000-8000-0000000000${n}`
-const ID = { donoA: U("a1"), donoB: U("b1"), barbA: U("c1"), maria: U("d1"), joao: U("d2"), atac1: U("e1"), atac2: U("e2"), atac3: U("e3") }
+const ID = { donoA: U("a1"), donoB: U("b1"), barbA: U("c1"), exBarb: U("c2"), maria: U("d1"), joao: U("d2"), atac1: U("e1"), atac2: U("e2"), atac3: U("e3") }
 
 const AMBIENTE = `
   create role anon nologin; create role authenticated nologin; create role service_role nologin bypassrls; create schema auth;
@@ -29,6 +29,8 @@ const AMBIENTE = `
 const db = new PGlite({ extensions: { btree_gist } })
 let lojaA = "", lojaB = "", corteA = "", corteB = "", anaA = "", beaB = ""
 let chaveSeq = 0
+let cardEx = ""
+const antes0049 = { reservasAcimaDoLimite: 0 }
 
 async function as<T>(user: string, fn: () => Promise<T>): Promise<T> {
   await db.exec("reset role")
@@ -62,7 +64,7 @@ const avisosDa = (reserva: string) => sql("select tipo, status, ultimo_erro from
 
 beforeAll(async () => {
   await db.exec(AMBIENTE)
-  for (const f of readdirSync("supabase/migrations").filter((x) => x.endsWith(".sql")).sort()) await db.exec(readFileSync(`supabase/migrations/${f}`, "utf8"))
+  for (const f of readdirSync("supabase/migrations").filter((x) => x.endsWith(".sql") && x < "0049").sort()) await db.exec(readFileSync(`supabase/migrations/${f}`, "utf8"))
   for (const [n, id] of Object.entries(ID)) await db.query("insert into auth.users (id, email, raw_user_meta_data) values ($1, $2, $3)", [id, `${n}@example.test`, { full_name: n }])
   const semana = JSON.stringify([0, 1, 2, 3, 4, 5, 6].map((dow) => ({ dow, inicio_min: 540, fim_min: 1080 })))
   lojaA = (await as(ID.donoA, () => sql("select create_barbershop('Barbearia A', 'barbearia-a') id")))[0].id
@@ -74,6 +76,23 @@ beforeAll(async () => {
   beaB = (await as(ID.donoB, () => sql("select save_professional($1, null, 'Bea', true, $2) id", [lojaB, [corteB]])))[0].id
   await as(ID.donoA, () => sql("select save_working_hours($1, $2)", [anaA, semana]))
   await as(ID.donoB, () => sql("select save_working_hours($1, $2)", [beaB, semana]))
+
+  // Barbeiro com card ATIVO ligado à conta (barbA) e ex-barbeiro: card com histórico, desativado pela gestão (exBarb).
+  await sql("insert into memberships (barbershop_id, profile_id, papel) values ($1, $2, 'barbeiro')", [lojaA, ID.exBarb])
+  for (const [nome, conta] of [["Caio", ID.barbA], ["Edu", ID.exBarb]] as const) {
+    const card = (await as(ID.donoA, () => sql("select save_professional($1, null, $2, true, $3) id", [lojaA, nome, [corteA]])))[0].id
+    await as(ID.donoA, () => sql("select link_professional($1, $2)", [card, conta]))
+    if (conta === ID.exBarb) cardEx = card
+  }
+  await as(ID.donoA, () => sql("select save_professional($1, $2, 'Edu', false, $3)", [lojaA, cardEx, [corteA]]))
+
+  // Antes da 0049: o ex-barbeiro (só com o papel) reservava na barbearia acima do limite de 10 em 24 h.
+  for (let i = 0; i < 12; i++) {
+    try { await cancelar(ID.exBarb, await reservar(lojaA, ID.exBarb, "(31) 96666-0004")) } catch { break }
+    if (i >= 10) antes0049.reservasAcimaDoLimite++
+  }
+  await sql("update bookings set criado_em = now() - interval '25 hours' where customer_id = $1", [ID.exBarb])
+  await db.exec(readFileSync("supabase/migrations/0049_limite_reservas_equipe_ativa.sql", "utf8"))
 }, 60_000)
 
 afterAll(async () => {
@@ -96,7 +115,7 @@ describe("limite por conta (create_booking)", () => {
     expect(await reservar(lojaA, ID.joao, "(21) 98888-0002")).toMatch(/^[0-9a-f-]{36}$/)
   })
 
-  it("a equipe não tem o limite na própria barbearia, mas tem nas outras", async () => {
+  it("barbeiro com card ativo não tem o limite na própria barbearia, mas tem nas outras", async () => {
     for (let i = 0; i < 10; i++) await cancelar(ID.barbA, await reservar(lojaA, ID.barbA, "(31) 96666-0003"))
     expect(await reservar(lojaA, ID.barbA, "(31) 96666-0003")).toMatch(/^[0-9a-f-]{36}$/)
     await expect(reservar(lojaB, ID.barbA, "(31) 96666-0003")).rejects.toThrow(/booking_rate_limited/)
@@ -140,5 +159,35 @@ describe("teto de avisos de reserva por telefone", () => {
   it("outros números seguem recebendo avisos normalmente", async () => {
     const r = await reservar(lojaA, ID.joao, "(21) 98888-0002")
     for (const a of await avisosDa(r)) expect(a.status).toBe("pendente")
+  })
+})
+
+describe("isenção do limite só para quem segue na equipe (0049)", () => {
+  it("antes da 0049, o barbeiro com card desativado reservava acima do limite de 10 em 24 h", () => {
+    expect(antes0049).toEqual({ reservasAcimaDoLimite: 2 })
+  })
+
+  it("depois: card desativado volta ao limite de cliente; histórico, reservas e papel ficam como estavam", async () => {
+    const reservasAntes = Number((await sql("select count(*) n from bookings where customer_id = $1", [ID.exBarb]))[0].n)
+    for (let i = 0; i < 10; i++) await cancelar(ID.exBarb, await reservar(lojaA, ID.exBarb, "(31) 96666-0004"))
+    await expect(reservar(lojaA, ID.exBarb, "(31) 96666-0004")).rejects.toThrow(/booking_rate_limited/)
+    expect(Number((await sql("select count(*) n from bookings where customer_id = $1", [ID.exBarb]))[0].n)).toBe(reservasAntes + 10)
+    expect((await sql("select papel from memberships where barbershop_id = $1 and profile_id = $2", [lojaA, ID.exBarb]))[0].papel).toBe("barbeiro")
+    expect((await sql("select ativo, profile_id from professionals where id = $1", [cardEx]))[0]).toEqual({ ativo: false, profile_id: ID.exBarb })
+  })
+
+  it("reativar o card devolve a isenção; proprietário segue isento na própria barbearia", async () => {
+    await as(ID.donoA, () => sql("select save_professional($1, $2, 'Edu', true, $3)", [lojaA, cardEx, [corteA]]))
+    expect(await reservar(lojaA, ID.exBarb, "(31) 96666-0004")).toMatch(/^[0-9a-f-]{36}$/)
+    for (let i = 0; i < 10; i++) await cancelar(ID.donoA, await reservar(lojaA, ID.donoA, "(31) 96666-0005"))
+    expect(await reservar(lojaA, ID.donoA, "(31) 96666-0005")).toMatch(/^[0-9a-f-]{36}$/)
+  })
+
+  it("conta só com o papel barbeiro, sem card nenhum, também não tem a isenção", async () => {
+    const semCard = U("c3")
+    await db.query("insert into auth.users (id, email, raw_user_meta_data) values ($1, 'semcard@example.test', '{}')", [semCard])
+    await sql("insert into memberships (barbershop_id, profile_id, papel) values ($1, $2, 'barbeiro')", [lojaA, semCard])
+    for (let i = 0; i < 10; i++) await cancelar(semCard, await reservar(lojaA, semCard, "(31) 96666-0006"))
+    await expect(reservar(lojaA, semCard, "(31) 96666-0006")).rejects.toThrow(/booking_rate_limited/)
   })
 })

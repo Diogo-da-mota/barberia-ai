@@ -3,6 +3,7 @@ import { usePathTab } from "@/lib/pathTab"
 import { useQuery } from "@tanstack/react-query"
 import { Settings } from "lucide-react"
 import { AppearanceCard } from "@/app/AppearanceCard"
+import { AccountCard } from "@/features/auth/components/AccountCard"
 import { CatalogFrame } from "@/features/catalog/components/CatalogFrame"
 import { useActiveBarbershop } from "@/features/catalog/hooks/useActiveBarbershop"
 import { PAPEL_LABEL, type MyBarbershop, type Papel } from "@/features/home/domain"
@@ -37,7 +38,8 @@ const DESCRIPTION = "Dados e informações da sua barbearia."
 
 /**
  * Central de configurações. A gestão (proprietário e gerente) vê as quatro abas; os dados moram na própria barbearia e são lidos de um lugar só.
- * Equipe sem gestão e cliente comum veem a versão curta (quem sou, agenda do Google, aparência e novidades). A cor de destaque da barbearia
+ * Equipe sem gestão e cliente comum veem a versão curta (quem sou, agenda do Google, aparência, novidades e Conta: sair da
+ * barbearia e excluir a conta). A cor de destaque da barbearia
  * é configurada em Meu site; aqui só quem não alcança Meu site mantém o seletor de aparência.
  */
 export function More() {
@@ -58,6 +60,7 @@ export function More() {
         {shop && shop.papel !== "cliente" && <CalendarCard shopId={shop.id} />}
         <AppearanceCard />
         {shop && <PreferencesCard shopId={shop.id} shopName={shop.nome} />}
+        {!gate.clientOnly && <AccountCard />}
       </CatalogFrame>
     )
   }

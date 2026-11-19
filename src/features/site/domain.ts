@@ -51,6 +51,7 @@ const MEDIA_MESSAGES: Record<string, string> = {
   invalid_template: "Escolha um dos modelos disponíveis.",
   invalid_slug: "O link deve ter de 3 a 60 letras minúsculas, números e hífens.",
   slug_taken: "Este link já está em uso. Escolha outro.",
+  slug_limit: "Esta barbearia já usou 5 endereços. Volte a um endereço anterior.",
   slug_reserved: "Este endereço é reservado pelo sistema. Escolha outro.",
   forbidden: "Você não tem permissão para esta ação.",
 }
